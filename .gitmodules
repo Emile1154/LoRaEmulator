@@ -4,3 +4,6 @@
 [submodule "LoRaSDR"]
 	path = LoRaSDR
 	url = https://github.com/Emile1154/LoRaSDR.git
+[submodule "FutureSDR"]
+	path = FutureSDR
+	url = https://github.com/FutureSDR/FutureSDR.git
