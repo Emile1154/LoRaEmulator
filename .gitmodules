@@ -1,3 +1,6 @@
 [submodule "meshtastic_firmware"]
 	path = meshtastic_firmware
 	url = https://github.com/Emile1154/firmware
+[submodule "LoRaSDR"]
+	path = LoRaSDR
+	url = https://github.com/Emile1154/LoRaSDR.git
