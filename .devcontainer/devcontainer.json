@@ -1,0 +1,26 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/cpp
+{
+  "name": "Meshtastic Firmware Dev",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/home/user/workspace,type=bind",
+  "workspaceFolder": "/home/user/workspace",
+  "runArgs": ["--network=host"],
+  "remoteEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}"
+  },
+  "initializeCommand": "xhost +local:user",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "actboy168.tasks",
+        "ms-python.python",
+        "ms-python.black-formatter",
+        "ms-vscode.cpptools"
+      ]
+    }
+  }
+}
