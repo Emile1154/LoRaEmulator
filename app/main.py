@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt
 
 from model.Project import ProjectModel
 from view.GraphicsView import GraphicsView
+from view.MapScene import MapScene
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -19,7 +20,8 @@ class MainWindow(QMainWindow):
 
         self.project_model = ProjectModel()
 
-        self.scene = QGraphicsScene()
+        self.scene = MapScene(None)
+        
         self.scene.setSceneRect(-5000, -5000, 10000, 10000)
         self.view = GraphicsView(self.scene)
         self.setCentralWidget(self.view)
@@ -27,25 +29,16 @@ class MainWindow(QMainWindow):
         self.node_controller = NodeController(self.project_model, self.scene)
         self.project_controller = ProjectController(self.project_model, self.node_controller, self.scene)
         self.emulation_controller = EmulationController(self.project_model)
-
+        
+        self.scene.node_controller = self.node_controller
+        
         self.coord_label = QLabel("X: 0  Y: 0")
         self.statusBar().addPermanentWidget(self.coord_label)
         self.view.mouseMoved.connect(self.update_coords)
-
-        self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.view.customContextMenuRequested.connect(self._view_context_menu)
-
         self._create_menu()
 
     def update_coords(self, x, y):
         self.coord_label.setText(f"X: {int(x)}  Y: {int(y)}")
-
-    def _view_context_menu(self, pos):
-        scene_pos = self.view.mapToScene(pos)
-        menu = QMenu()
-        act = menu.addAction("Create node")
-        if menu.exec(self.view.mapToGlobal(pos)) == act:
-            self.node_controller.create_node(scene_pos.x(), scene_pos.y(), self)
 
     def _create_menu(self):
         menu_file = self.menuBar().addMenu("File")

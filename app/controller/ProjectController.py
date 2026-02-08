@@ -1,7 +1,7 @@
 from controller.NodeController import NodeController
 from model.Project import ProjectModel
 from PyQt6.QtWidgets import QGraphicsScene, QFileDialog
-from model.Node import Node
+from view.NodeItem import NodeItem
 
 class ProjectController:
     def __init__(self, model: ProjectModel, node_controller: NodeController, scene: QGraphicsScene):
@@ -26,4 +26,4 @@ class ProjectController:
                 self.model.from_json(f.read())
             self.scene.clear()
             for node in self.model.nodes:
-                self.scene.addItem(Node(node, self.node_controller))
+                self.scene.addItem(NodeItem(node, self.node_controller))
