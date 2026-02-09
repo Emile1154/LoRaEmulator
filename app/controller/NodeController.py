@@ -4,14 +4,19 @@ from PyQt6.QtWidgets import QGraphicsScene, QFileDialog
 from model.Node import Node, State
 from view.NodeItem import NodeItem
 from view.dialogs import NodeDialog
-
+import random
 class NodeController:
     def __init__(self, project_model: ProjectModel, scene: QGraphicsScene):
         self.project = project_model
         self.scene = scene
+    
+    def generate_MAC(self):
+        mac = [random.randint(0x00, 0xFF) for _ in range(6)]
+        mac_address = ''.join(f'{byte:02x}' for byte in mac)
+        return mac_address.upper() 
 
     def create_node(self, x, y, parent):
-        model = Node(8000, 1000, 2000, State.CREATED, x, y)
+        model = Node(x, y, mac=self.generate_MAC())
         dlg = NodeDialog(model, parent)
         if dlg.exec():
             dlg.apply()

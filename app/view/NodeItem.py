@@ -3,8 +3,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QPen, QContextMenuEvent, QBrush, QFont
 from PyQt6.QtCore import Qt
-from model.Node import Node, State
-
+from model.Node import Node, State, status_text
 NODE_RADIUS = 25
 STATUS_RADIUS = 4
 LABEL_OFFSET_Y = NODE_RADIUS + 6
@@ -16,15 +15,9 @@ color_status_dict = {
     State.STOPPED  : Qt.GlobalColor.blue,
     State.ERROR    : Qt.GlobalColor.red,
 }
-status_text = {
-    State.CREATED:  "CREATED",
-    State.STARTING:"STARTING",
-    State.RUNNING: "RUNNING",
-    State.STOPPED: "STOPPED",
-    State.ERROR:   "ERROR",
-}
 
-class NodeItem(QGraphicsEllipseItem):
+
+class NodeItem(QGraphicsEllipseItem):    
     def __init__(self, model: Node, controller):
         super().__init__(-NODE_RADIUS, -NODE_RADIUS,
                          NODE_RADIUS * 2, NODE_RADIUS * 2)
@@ -39,7 +32,7 @@ class NodeItem(QGraphicsEllipseItem):
         self.setAcceptedMouseButtons(Qt.MouseButton.AllButtons)
         self.setPos(model.x, model.y)
 
-        self.name_label = QGraphicsTextItem("TEST1", self)
+        self.name_label = QGraphicsTextItem(model.short_mac(), self)
         self.name_label.setDefaultTextColor(Qt.GlobalColor.black)
 
         font = QFont()
@@ -58,7 +51,6 @@ class NodeItem(QGraphicsEllipseItem):
         )
 
         self._layout_labels()
-        self.setStatus(State.CREATED)
     
     def setStatus(self, state : State):
         color = color_status_dict[state]
@@ -69,6 +61,8 @@ class NodeItem(QGraphicsEllipseItem):
 
         self.status_item.setBrush(QBrush(color)) 
         self.status_item.setPen(QPen(Qt.PenStyle.NoPen))
+
+        self.model.state = state
 
         self._layout_labels()
 

@@ -19,3 +19,10 @@ class EmulationController:
             return
         self.running = False
         print("Emulation stopped")
+
+    def launch_all(self):
+        
+        pass
+
+    def shutdown_all(self):
+        pass
