@@ -50,6 +50,8 @@ class NodeItem(QGraphicsEllipseItem):
             self
         )
 
+        self.setStatus(model.state)
+
         self._layout_labels()
     
     def setStatus(self, state : State):
