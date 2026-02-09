@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QMenu, QLabel
 )
 from PyQt6.QtCore import Qt
-
+import PyQt6.QtGui as QtGui
 from model.Project import ProjectModel
 from view.GraphicsView import GraphicsView
 from view.MapScene import MapScene
@@ -46,7 +46,9 @@ class MainWindow(QMainWindow):
         menu_file.addAction("Open project", lambda: self.project_controller.open_project(self))
         menu_file.addAction("Save", lambda: self.project_controller.save_project(self))
 
-        menu_run = self.menuBar().addMenu("Run")
+        menu_run = self.menuBar().addMenu("Run")        
+        menu_run.addAction("Launch All Devices", self.emulation_controller.launch_all)
+        menu_run.addAction("Shutdown All Devices", self.emulation_controller.shutdown_all)
         menu_run.addAction("Start emulation", self.emulation_controller.start)
         menu_run.addAction("Stop emulation", self.emulation_controller.stop)
 
