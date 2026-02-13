@@ -14,16 +14,23 @@ class ProjectController:
         self.scene.clear()
 
     def save_project(self, parent):
-        path, _ = QFileDialog.getSaveFileName(parent, "Save project", "", "JSON (*.json)")
-        if path:
-            with open(path, "w") as f:
-                f.write(self.model.to_json())
+        # If no file path set (first save), show dialog
+        if self.model.file_path is None:
+            path, _ = QFileDialog.getSaveFileName(parent, "Save project", "project.json", "JSON (*.json)")
+            if not path:
+                return  # User cancelled
+            self.model.file_path = path
+        
+        # Save to the stored file path
+        with open(self.model.file_path, "w") as f:
+            f.write(self.model.to_json())
 
     def open_project(self, parent):
         path, _ = QFileDialog.getOpenFileName(parent, "Open project", "", "JSON (*.json)")
         if path:
             with open(path) as f:
                 self.model.from_json(f.read())
+            self.model.file_path = path
             self.scene.clear()
             for node in self.model.nodes:
                 self.scene.addItem(NodeItem(node, self.node_controller))
