@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (
-    QGraphicsEllipseItem, QMenu, QGraphicsTextItem
+    QGraphicsEllipseItem, QMenu, QGraphicsTextItem, QApplication, QGraphicsRectItem
 )
 from PyQt6.QtGui import QPen, QContextMenuEvent, QBrush, QFont
 from PyQt6.QtCore import Qt
@@ -13,6 +13,7 @@ color_status_dict = {
     State.STARTING : Qt.GlobalColor.yellow,
     State.RUNNING  : Qt.GlobalColor.green,
     State.STOPPED  : Qt.GlobalColor.blue,
+    State.STOPPING : Qt.GlobalColor.yellow,
     State.ERROR    : Qt.GlobalColor.red,
 }
 
@@ -32,15 +33,22 @@ class NodeItem(QGraphicsEllipseItem):
         self.setAcceptedMouseButtons(Qt.MouseButton.AllButtons)
         self.setPos(model.x, model.y)
 
-        self.name_label = QGraphicsTextItem(model.short_mac(), self)
+        # --- background for labels ---
+        self.label_bg = QGraphicsRectItem(self)
+        self.label_bg.setBrush(QBrush(Qt.GlobalColor.white))
+        self.label_bg.setPen(QPen(Qt.GlobalColor.black, 1))
+        self.label_bg.setZValue(-1)  # Behind text labels
+
+        self.name_label = QGraphicsTextItem(self)
         self.name_label.setDefaultTextColor(Qt.GlobalColor.black)
+        self.name_label.setPlainText(model.short_mac())
 
         font = QFont()
         font.setPointSize(9)
         self.name_label.setFont(font)
 
         # --- status text ---
-        self.status_label = QGraphicsTextItem("", self)
+        self.status_label = QGraphicsTextItem(self)
         self.status_label.setFont(font)
 
         # --- status indicator ---
@@ -61,12 +69,13 @@ class NodeItem(QGraphicsEllipseItem):
         self.status_label.setPlainText(text)
         self.status_label.setDefaultTextColor(color)
 
-        self.status_item.setBrush(QBrush(color)) 
+        self.status_item.setBrush(QBrush(color))
         self.status_item.setPen(QPen(Qt.PenStyle.NoPen))
 
         self.model.state = state
 
         self._layout_labels()
+        QApplication.processEvents()
 
     def _layout_labels(self):
         name_rect = self.name_label.boundingRect()
@@ -94,6 +103,13 @@ class NodeItem(QGraphicsEllipseItem):
             x + STATUS_RADIUS,
             y + status_rect.height() / 2
         )
+
+        # Update background rectangle to cover both labels
+        bg_x = -total_width / 2 - 3
+        bg_y = y - 2
+        bg_width = name_rect.width() + status_rect.width() + 12 + 3
+        bg_height = max(name_rect.height(), status_rect.height()) + 4
+        self.label_bg.setRect(bg_x, bg_y, bg_width, bg_height)
 
     def mouseReleaseEvent(self, event):
         self.controller.update_position(self, self.pos())
@@ -128,7 +144,7 @@ class NodeItem(QGraphicsEllipseItem):
         is_running = self.model.state == State.RUNNING
 
         act_enable.setEnabled(not is_running)
-        act_disable.setEnabled(is_running)
+        act_disable.setEnabled(True)
 
         act_web.setEnabled(is_running)
         act_term.setEnabled(is_running)
