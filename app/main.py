@@ -22,7 +22,7 @@ class MainWindow(QMainWindow):
 
         self.scene = MapScene(None)
         
-        self.scene.setSceneRect(-5000, -5000, 10000, 10000)
+        self.scene.setSceneRect(-5000, -5000, 5000, 5000)
         self.view = GraphicsView(self.scene)
         self.setCentralWidget(self.view)
 
@@ -44,15 +44,25 @@ class MainWindow(QMainWindow):
         menu_file = self.menuBar().addMenu("File")
         menu_file.addAction("New project", self.project_controller.new_project)
         menu_file.addAction("Open project", lambda: self.project_controller.open_project(self))
-        menu_file.addAction("Save", lambda: self.project_controller.save_project(self))
+        
+        # Save action with Ctrl+S shortcut
+        save_action = QtGui.QAction("Save", self)
+        save_action.setShortcut(QtGui.QKeySequence("Ctrl+S"))
+        save_action.triggered.connect(lambda: self.project_controller.save_project(self))
+        menu_file.addAction(save_action)
 
         menu_run = self.menuBar().addMenu("Run")        
-        menu_run.addAction("Launch All Devices", self.emulation_controller.launch_all)
-        menu_run.addAction("Shutdown All Devices", self.emulation_controller.shutdown_all)
+        menu_run.addAction("Launch All Devices", self.node_controller.launch_all)
+        menu_run.addAction("Shutdown All Devices", self.node_controller.shutdown_all)
         menu_run.addAction("Start emulation", self.emulation_controller.start)
         menu_run.addAction("Stop emulation", self.emulation_controller.stop)
 
         self.menuBar().addAction("About program")
+
+    def closeEvent(self, event):
+        """Handle application close event - shutdown all nodes."""
+        self.node_controller.shutdown_all()
+        event.accept()
 
 
 if __name__ == '__main__':
