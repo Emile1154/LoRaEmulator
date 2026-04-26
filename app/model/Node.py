@@ -22,8 +22,12 @@ status_text = {
     State.ERROR:   "ERROR",
 }
 
-IMAGE_NAME = "meshtastic-firmware-dev"
+IMAGE_NAME = "meshtastic-firmware-dev2"
 MESHTASTIC_ABSOLUTE_PATH = "./meshtasticd"
+
+# Resolve absolute project root (parent of app/ directory)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 @dataclass
 class Node:
     web_port: int
@@ -76,7 +80,7 @@ class Node:
 
     def enable(self):
         client = docker.from_env()
-        workspace_path = os.getcwd()
+        workspace_path = PROJECT_ROOT
 
         try:
             client.images.get(f"{IMAGE_NAME}:latest")
@@ -114,7 +118,7 @@ class Node:
                 container = client.containers.run(IMAGE_NAME,
                     command=build_cmd, detach=True, name="build_meshtasicd",
                     auto_remove=True, network_mode='host',
-                    volumes={f'{workspace_path}/meshtastic_firmware' : {'bind': '/home/user/workspace/meshtastic_firmware', 'mode': 'rw'} },
+                    volumes={f'{workspace_path}' : {'bind': '/home/user/workspace', 'mode': 'rw'} },
                     working_dir='/home/user/workspace/meshtastic_firmware',
                 )
                 for line in container.logs(stream=True, follow=True):
@@ -132,26 +136,62 @@ class Node:
             # Run meshtasticd inside Docker container
             # -s -v -l "$1" -r "$2" -w "$3" -h "$MAC_ADDR
             launch_daemon = f"./meshtasticd -s -v -l {self.local_port} -r {self.remote_port} -w {self.web_port} -h {self.MAC_address}"
+            
+            # Warn if web root is missing (hard-coded in firmware to /home/user/workspace/web)
+            web_root = os.path.join(workspace_path, "web")
+            if not os.path.isdir(web_root):
+                self.logger(f"WARNING: web root not found at {web_root}. Web UI will return 404.", "WARN")
+            
             container = client.containers.run(IMAGE_NAME,
                                               command=launch_daemon, detach=True, name=self.container_name,
                                               auto_remove=True, network_mode='host',
-                                              volumes={f'{workspace_path}/meshtastic_firmware': {'bind': '/home/user/workspace/meshtastic_firmware', 'mode': 'rw'}},
+                                              volumes={f'{workspace_path}': {'bind': '/home/user/workspace/', 'mode': 'rw'}},
                                               working_dir='/home/user/workspace/meshtastic_firmware/.pio/build/native_virtual', 
                                             )
-                                              
+                                               
             self.logger(f"container {self.container_name} started", "INFO")
+            self.open_shell()
             return 0
         return 0
+
+    def open_shell(self):
+        """Open an xterm showing live logs of the running daemon."""
+        client = docker.from_env()
+        try:
+            container = client.containers.get(self.container_name)
+            if container.status != "running":
+                self.logger(f"container {self.container_name} is not running", "ERROR")
+                return 1
+            
+            # Open xterm following container logs
+            cmd = [
+                "xterm",
+                "-fa", "Monospace",
+                "-fs", "10",
+                "-T", f"Logs: {self.container_name}",
+                "-e", f"docker logs -f {self.container_name}"
+            ]
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.logger(f"opened log viewer for container {self.container_name}", "INFO")
+            return 0
+        except docker.errors.NotFound:
+            self.logger(f"container {self.container_name} doesn't exist", "ERROR")
+            return 1
+        except Exception as e:
+            self.logger(f"failed to open log viewer: {e}", "ERROR")
+            return 1
 
     def shutdown(self):
         client = docker.from_env()
         try:
             container = client.containers.get(self.container_name)
             container.stop()
-            # Container is auto-removed due to auto_remove=True in run()
-            self.logger(f"container {self.container_name} is stopped", "INFO")
-        except:
+            container.remove(force=True)
+            self.logger(f"container {self.container_name} is stopped and removed", "INFO")
+        except docker.errors.NotFound:
             self.logger(f"container {self.container_name} doesn't exist.", "INFO")
+        except Exception as e:
+            self.logger(f"error stopping container: {e}", "ERROR")
         
         return 0
         

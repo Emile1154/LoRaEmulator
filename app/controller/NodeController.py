@@ -46,8 +46,14 @@ class NodeController:
     
     def delete_node(self, item: NodeItem):
         self.disable_node(item)
-        self.project.nodes.remove(item.model)
-        self.project.gui_nodes.remove(item)
+        try:
+            self.project.nodes.remove(item.model)
+        except ValueError:
+            pass
+        try:
+            self.project.gui_nodes.remove(item)
+        except ValueError:
+            pass
         self.scene.removeItem(item)
 
     def launch_all(self):
@@ -68,3 +74,4 @@ class NodeController:
 
     def open_terminal(self, item: NodeItem):
         print(f"Open terminal for node {item.model.local_port}")
+        item.model.open_shell()

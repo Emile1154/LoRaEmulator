@@ -32,5 +32,8 @@ class ProjectController:
                 self.model.from_json(f.read())
             self.model.file_path = path
             self.scene.clear()
+            self.model.gui_nodes.clear()
             for node in self.model.nodes:
-                self.scene.addItem(NodeItem(node, self.node_controller))
+                item = NodeItem(node, self.node_controller)
+                self.model.gui_nodes.append(item)
+                self.scene.addItem(item)

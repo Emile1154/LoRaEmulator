@@ -10,6 +10,7 @@ class ProjectModel:
 
     def clear(self):
         self.nodes.clear()
+        self.gui_nodes.clear()
         self.file_path = None
 
     def to_json(self) -> str:
