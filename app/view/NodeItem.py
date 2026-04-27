@@ -139,6 +139,7 @@ class NodeItem(QGraphicsEllipseItem):
 
         act_web = menu.addAction("Open web interface")
         act_term = menu.addAction("Open terminal")
+        act_setup_term = menu.addAction("Open setup terminal")
 
         # --- state logic ---
         is_running = self.model.state == State.RUNNING
@@ -168,4 +169,7 @@ class NodeItem(QGraphicsEllipseItem):
             self.controller.open_web(self)
 
         elif action == act_term:
-            self.controller.open_terminal(self)
+            self.controller.open_terminal(self,False)
+
+        elif action == act_setup_term:
+            self.controller.open_terminal(self,True)

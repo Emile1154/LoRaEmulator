@@ -72,6 +72,9 @@ class NodeController:
     def open_web(self, item: NodeItem):
         print(f"Open web interface on port {item.model.web_port}")
 
-    def open_terminal(self, item: NodeItem):
+    def open_terminal(self, item: NodeItem, setup):
         print(f"Open terminal for node {item.model.local_port}")
+        if setup:
+            item.model.open_shell_setup()    
+            return
         item.model.open_shell()

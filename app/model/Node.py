@@ -180,6 +180,35 @@ class Node:
         except Exception as e:
             self.logger(f"failed to open log viewer: {e}", "ERROR")
             return 1
+        
+    def open_shell_setup(self):
+        """Open an xterm showing live logs of the running daemon."""
+        client = docker.from_env()
+        try:
+            container = client.containers.get(self.container_name)
+            if container.status != "running":
+                self.logger(f"container {self.container_name} is not running", "ERROR")
+                return 1
+            
+            # Open xterm following container logs
+            cmd = [
+                "xterm",
+                "-fa", "Monospace",
+                "-fs", "10",
+                "-T", f"Shell: {self.container_name}",
+                "-e", f"docker exec -it {self.container_name} /bin/bash"
+            ]
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.logger(f"opened log viewer for container {self.container_name}", "INFO")
+            return 0
+        except docker.errors.NotFound:
+            self.logger(f"container {self.container_name} doesn't exist", "ERROR")
+            return 1
+        except Exception as e:
+            self.logger(f"failed to open log viewer: {e}", "ERROR")
+            return 1
+        # Open xterm with docker exec
+            
 
     def shutdown(self):
         client = docker.from_env()
