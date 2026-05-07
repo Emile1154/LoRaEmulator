@@ -86,9 +86,11 @@ class NodeDialog(QDialog):
         self.web_port = QLineEdit(str(model.web_port))
         self.local_port = QLineEdit(str(model.local_port))
         self.remote_port = QLineEdit(str(model.remote_port))
+        self.tcp_port = QLineEdit(str(model.tcp_port))
         self.port_form.addRow("Web server:", self.web_port)
         self.port_form.addRow("Local:", self.local_port)
         self.port_form.addRow("Remote:", self.remote_port)
+        self.port_form.addRow("TCP port:", self.tcp_port)
 
         self.general_layout.addWidget(self.port_groupbox)
 
@@ -342,6 +344,7 @@ class NodeDialog(QDialog):
         self.model.web_port = int(self.web_port.text())
         self.model.local_port = int(self.local_port.text())
         self.model.remote_port = int(self.remote_port.text())
+        self.model.tcp_port    = int(self.tcp_port.text())
         self.model.x = float(self.pos_x.text())
         self.model.y = float(self.pos_y.text())
         
