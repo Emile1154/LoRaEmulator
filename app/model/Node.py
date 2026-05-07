@@ -3,7 +3,12 @@ from enum import Enum
 import docker
 import os
 import subprocess
-
+import time
+import traceback
+from datetime import timedelta
+from meshtastic import mesh_pb2, config_pb2
+from pubsub import pub
+from meshtastic.tcp_interface import TCPInterface
 
 class State(Enum):
     CREATED  = 1
@@ -22,7 +27,7 @@ status_text = {
     State.ERROR:   "ERROR",
 }
 
-IMAGE_NAME = "meshtastic-firmware-dev2"
+IMAGE_NAME = "meshtastic-firmware-dev"
 MESHTASTIC_ABSOLUTE_PATH = "./meshtasticd"
 
 # Resolve absolute project root (parent of app/ directory)
@@ -33,6 +38,7 @@ class Node:
     web_port: int
     local_port: int
     remote_port: int
+    tcp_port: int
     state : State
     x: float
     y: float
@@ -48,17 +54,18 @@ class Node:
     slots_count : int
     modem_preset : str
 
-    def __init__(self, x=0, y=0, MAC_address="", local_port=8000, remote_port=8002, web_port=9000,
+    def __init__(self, x=0, y=0, MAC_address="", local_port=8000, remote_port=8002, web_port=9000, tcp_port=4403,
                  state=None, frequency=0, bandwidth=0, code_rate=0, spreading_factor=0,
                  ldro_enable=False, region="UNSET", slots_count=0, modem_preset="LONG_FAST"):
         self.local_port = local_port
         self.remote_port = remote_port
         self.web_port = web_port
+        self.tcp_port = tcp_port
 
         self.x = x
         self.y = y
         self.MAC_address = MAC_address
-        
+
         self.state = state if state is not None else State.CREATED
 
         self.frequency = frequency
@@ -71,7 +78,9 @@ class Node:
         self.modem_preset = modem_preset
 
         self.container_name = f"node_{self.short_mac()}"
-        
+        self.start_time = None
+        self.interface = None
+
     def short_mac(self):
         return self.MAC_address[-4:]
 
@@ -135,7 +144,7 @@ class Node:
             
             # Run meshtasticd inside Docker container
             # -s -v -l "$1" -r "$2" -w "$3" -h "$MAC_ADDR
-            launch_daemon = f"./meshtasticd -s -v -l {self.local_port} -r {self.remote_port} -w {self.web_port} -h {self.MAC_address}"
+            launch_daemon = f"./meshtasticd -s -v -p {self.tcp_port} -l {self.local_port} -r {self.remote_port} -w {self.web_port} -h {self.MAC_address}"
             
             # Warn if web root is missing (hard-coded in firmware to /home/user/workspace/web)
             web_root = os.path.join(workspace_path, "web")
@@ -146,13 +155,75 @@ class Node:
                                               command=launch_daemon, detach=True, name=self.container_name,
                                               auto_remove=True, network_mode='host',
                                               volumes={f'{workspace_path}': {'bind': '/home/user/workspace/', 'mode': 'rw'}},
-                                              working_dir='/home/user/workspace/meshtastic_firmware/.pio/build/native_virtual', 
+                                              working_dir='/home/user/workspace/meshtastic_firmware/.pio/build/native_virtual',
                                             )
-                                               
-            self.logger(f"container {self.container_name} started", "INFO")
+
+            self.start_time = time.time()
+            self.state = State.RUNNING
+            self.logger(f"container {self.container_name} started (pid={container.attrs['State']['Pid']})", "INFO")
             self.open_shell()
+            time.sleep(8)
+            self.init_meshtastic_client()
             return 0
         return 0
+
+    def init_meshtastic_client(self):
+        try:
+            self.interface = TCPInterface(hostname="localhost", portNumber=self.tcp_port)
+            pub.subscribe(self.onConnection, "meshtastic.connection.established")
+            self.logger(f"meshtastic TCP client initiated on port {self.tcp_port}", "INFO")
+        except Exception as e:
+            self.logger(f"meshtastic TCP client failed to connect on port {self.tcp_port}: {e}", "ERROR")
+            self.logger(traceback.format_exc(), "ERROR")
+            self.check_container_status()
+
+    def onConnection(self, interface, **kwargs):
+        self.logger(f"connected to radio via TCP for container: {self.container_name}", "INFO")
+        node = self.interface.localNode
+        lc = node.localConfig
+        lc.lora.region = config_pb2.Config.LoRaConfig.RegionCode.RU
+        lc.lora.use_preset = True
+        lc.lora.modem_preset = config_pb2.Config.LoRaConfig.ModemPreset.LONG_FAST
+        node.writeConfig("lora")
+
+    def check_container_status(self):
+        client = docker.from_env()
+        try:
+            container = client.containers.get(self.container_name)
+            status = container.status
+            attrs = container.attrs
+            state = attrs.get('State', {})
+
+            runtime_sec = 0.0
+            if self.start_time:
+                runtime_sec = time.time() - self.start_time
+
+            self.logger(
+                f"container status={status} runtime={timedelta(seconds=int(runtime_sec))} "
+                f"started_at={state.get('StartedAt','?')} pid={state.get('Pid','?')}",
+                "INFO"
+            )
+
+            if status != "running":
+                exit_code = state.get('ExitCode', '?')
+                error_msg = state.get('Error', '')
+                self.logger(
+                    f"container NOT RUNNING: exit_code={exit_code} error='{error_msg}'",
+                    "ERROR"
+                )
+                logs = container.logs(tail=50)
+                if logs:
+                    self.logger(f"last container logs:\n{logs.decode('utf-8', errors='replace').strip()}", "ERROR")
+                self.state = State.ERROR
+                return False
+            return True
+        except docker.errors.NotFound:
+            self.logger("container not found during status check", "ERROR")
+            self.state = State.ERROR
+            return False
+        except Exception as e:
+            self.logger(f"error checking container status: {e}", "ERROR")
+            return False
 
     def open_shell(self):
         """Open an xterm showing live logs of the running daemon."""
@@ -212,15 +283,43 @@ class Node:
 
     def shutdown(self):
         client = docker.from_env()
+        runtime_sec = 0.0
+        if self.start_time:
+            runtime_sec = time.time() - self.start_time
+
         try:
             container = client.containers.get(self.container_name)
+            status_before = container.status
+            state_before = container.attrs.get('State', {})
+            exit_code_before = state_before.get('ExitCode', '?')
+
             container.stop()
             container.remove(force=True)
-            self.logger(f"container {self.container_name} is stopped and removed", "INFO")
+
+            self.state = State.STOPPED
+            self.logger(
+                f"container stopped and removed (runtime={timedelta(seconds=int(runtime_sec))}, "
+                f"status_before={status_before}, exit_code_before={exit_code_before})",
+                "INFO"
+            )
         except docker.errors.NotFound:
-            self.logger(f"container {self.container_name} doesn't exist.", "INFO")
+            self.logger(
+                f"container not found at shutdown (runtime={timedelta(seconds=int(runtime_sec))})",
+                "INFO"
+            )
         except Exception as e:
-            self.logger(f"error stopping container: {e}", "ERROR")
-        
+            self.logger(
+                f"error stopping container after runtime={timedelta(seconds=int(runtime_sec))}: {e}",
+                "ERROR"
+            )
+            self.logger(traceback.format_exc(), "ERROR")
+
+        if self.interface:
+            try:
+                self.interface.close()
+                self.logger("meshtastic TCP client closed", "INFO")
+            except Exception as e:
+                self.logger(f"error closing meshtastic client: {e}", "WARN")
+
         return 0
         
