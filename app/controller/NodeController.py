@@ -5,6 +5,7 @@ from model.Node import Node, State
 from view.NodeItem import NodeItem
 from view.dialogs import NodeDialog
 import random
+import webbrowser
 class NodeController:
     def __init__(self, project_model: ProjectModel, scene: QGraphicsScene):
         self.project = project_model
@@ -71,6 +72,7 @@ class NodeController:
 
     def open_web(self, item: NodeItem):
         print(f"Open web interface on port {item.model.web_port}")
+        webbrowser.open(f"http://localhost:{item.model.web_port}")
 
     def open_terminal(self, item: NodeItem, setup):
         print(f"Open terminal for node {item.model.local_port}")
