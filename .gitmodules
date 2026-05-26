@@ -7,3 +7,6 @@
 [submodule "FutureSDR"]
 	path = FutureSDR
 	url = https://github.com/FutureSDR/FutureSDR.git
+[submodule "meshcore_firmware"]
+	path = meshcore_firmware
+	url = https://github.com/meshcore-dev/MeshCore
