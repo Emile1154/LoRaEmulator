@@ -80,6 +80,22 @@ class NodeDialog(QDialog):
         self.general_tab = QWidget()
         self.general_layout = QVBoxLayout(self.general_tab)
 
+        # Network Type Selection - GroupBox
+        self.network_groupbox = self._create_groupbox("Network Type")
+        self.network_layout = QHBoxLayout(self.network_groupbox)
+        self.network_type_group = QButtonGroup(self)
+
+        self.meshtastic_radio = QRadioButton("Meshtastic")
+        self.meshcore_radio   = QRadioButton("MeshCore")
+        self.network_type_group.addButton(self.meshtastic_radio)
+        self.network_type_group.addButton(self.meshcore_radio)
+
+        self.network_layout.addWidget(self.meshtastic_radio)
+        self.network_layout.addWidget(self.meshcore_radio)
+        self.network_layout.addStretch()
+
+        self.general_layout.addWidget(self.network_groupbox)
+
         # Port Configurations - GroupBox
         self.port_groupbox = self._create_groupbox("Port Configurations")
         self.port_form = QFormLayout(self.port_groupbox)
@@ -204,6 +220,12 @@ class NodeDialog(QDialog):
 
     def _load_from_model(self):
         """Load existing settings from model when editing a node"""
+        # Network type
+        if self.model.network_type == "meshcore":
+            self.meshcore_radio.setChecked(True)
+        else:
+            self.meshtastic_radio.setChecked(True)
+
         # Load modem preset if set
         if self.model.modem_preset:
             index = self.preset_combo.findText(self.model.modem_preset)
@@ -368,4 +390,6 @@ class NodeDialog(QDialog):
         self.model.region = region
         self.model.slots_count = self._calculate_num_channels(region, bw_khz)
         self.model.modem_preset = self.preset_combo.currentText()
+
+        self.model.network_type = "meshcore" if self.meshcore_radio.isChecked() else "meshtastic"
 

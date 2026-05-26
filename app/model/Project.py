@@ -26,4 +26,6 @@ class ProjectModel:
         for item in json.loads(text):
             # Convert state integer back to State enum
             item['state'] = State(item['state'])
+            # Backwards compatibility: old project files lack network_type
+            item.setdefault('network_type', 'meshtastic')
             self.nodes.append(Node(**item))
