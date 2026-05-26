@@ -1,15 +1,21 @@
-
 from model.Project import ProjectModel
-from PyQt6.QtWidgets import QGraphicsScene
+from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtWidgets import QGraphicsScene, QMessageBox
 from model.Node import Node, State
 from view.NodeItem import NodeItem
 from view.dialogs import NodeDialog
 import random
 import webbrowser
-class NodeController:
+
+
+class NodeController(QObject):
+    _node_crashed = pyqtSignal(str, str)  # container_name, last_logs
+
     def __init__(self, project_model: ProjectModel, scene: QGraphicsScene):
+        super().__init__()
         self.project = project_model
         self.scene = scene
+        self._node_crashed.connect(self._show_crash_alert)
     
     def generate_MAC(self):
         mac = [random.randint(0x00, 0xFF) for _ in range(6)]
@@ -32,9 +38,20 @@ class NodeController:
             dlg.apply()
             item.setPos(item.model.x, item.model.y)
 
+    def _on_node_crash(self, node: Node, logs: str):
+        self._node_crashed.emit(node.container_name, logs)
+
+    def _show_crash_alert(self, container_name: str, logs: str):
+        msg = QMessageBox()
+        msg.setWindowTitle(f"Node crashed: {container_name}")
+        msg.setText(f"Container <b>{container_name}</b> exited unexpectedly.")
+        msg.setDetailedText(logs or "(no logs captured)")
+        msg.setIcon(QMessageBox.Icon.Critical)
+        msg.exec()
+
     def enable_node(self, item: NodeItem):
         item.setStatus(State.STARTING)
-        res = item.model.enable()
+        res = item.model.enable(on_crash=self._on_node_crash)
         if res == 0:
             item.setStatus(State.RUNNING)
         else:
