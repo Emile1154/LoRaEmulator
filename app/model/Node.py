@@ -339,9 +339,19 @@ class Node:
 
         node.writeConfig("lora")
 
-        # NodeInfo broadcast happens automatically via NodeInfoModule within ~30s of startup.
-        # (setOwner would trigger an immediate broadcast but crashes the firmware's NodeDB
-        # when called with a synthetic name on a fresh node — the MAC is set via -h at launch.)
+        # Close the TCP interface after configuration so it stops draining toPhoneQueue.
+        # The firmware holds a single shared toPhoneQueue: if the Python TCPInterface stays
+        # connected it consumes every incoming radio packet in its background polling thread,
+        # leaving nothing for the web browser that polls /api/v1/fromradio.
+        # The web UI can still see nodes via nodeInfoForPhone (separate path), but text
+        # messages would be silently consumed by Python and never appear in the browser.
+        try:
+            pub.unsubscribe(self.onConnection, "meshtastic.connection.established")
+        except Exception:
+            pass
+        self.interface.close()
+        self.interface = None
+        self.logger("TCP interface closed after config — web UI is now sole queue consumer", "INFO")
 
 
     def check_container_status(self):
