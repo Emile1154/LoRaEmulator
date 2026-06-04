@@ -110,6 +110,13 @@ class NodeDialog(QDialog):
 
         self.general_layout.addWidget(self.port_groupbox)
 
+        # Channel simulation parameters
+        self.channel_groupbox = self._create_groupbox("Channel Simulation")
+        self.channel_form = QFormLayout(self.channel_groupbox)
+        self.noise_std = QLineEdit(str(model.noise_std))
+        self.channel_form.addRow("Noise std:", self.noise_std)
+        self.general_layout.addWidget(self.channel_groupbox)
+
         # Position - GroupBox
         self.position_groupbox = self._create_groupbox("Position")
         self.position_form = QFormLayout(self.position_groupbox)
@@ -259,6 +266,8 @@ class NodeDialog(QDialog):
         # LDRO is a boolean, so we always set it
         self.ldro_enable.setChecked(self.model.ldro_enable)
 
+        self.noise_std.setText(str(self.model.noise_std))
+
         # Final Layout
         layout = QVBoxLayout(self)
         layout.addWidget(self.tabs)
@@ -392,4 +401,9 @@ class NodeDialog(QDialog):
         self.model.modem_preset = self.preset_combo.currentText()
 
         self.model.network_type = "meshcore" if self.meshcore_radio.isChecked() else "meshtastic"
+
+        try:
+            self.model.noise_std = float(self.noise_std.text())
+        except ValueError:
+            self.model.noise_std = 2e-6
 

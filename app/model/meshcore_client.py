@@ -4,15 +4,15 @@ import threading
 import time
 
 # TCP framing markers
-_FRAME_FROM_APP  = 0x3C  # '<' — App→Radio
-_FRAME_FROM_NODE = 0x3E  # '>' — Radio→App
+_FRAME_FROM_APP  = 0x3C  # '<' — App Radio
+_FRAME_FROM_NODE = 0x3E  # '>' — Radio App
 
-# Commands: App → Radio
+# Commands: App  Radio
 CMD_APP_START        = 0x01
 CMD_SEND_CHANNEL_MSG = 0x03
 CMD_GET_MESSAGE      = 0x0A
 
-# Packets: Radio → App
+# Packets: Radio  App
 PACKET_OK                = 0x00
 PACKET_ERROR             = 0x01
 PACKET_SELF_INFO         = 0x05
@@ -30,10 +30,10 @@ class MeshCoreCompanionClient:
     TCP companion protocol client for MeshCore nodes.
 
     Frame format (TCP transport):
-      App→Radio: 0x3C ('<') + uint16LE(len) + payload
-      Radio→App: 0x3E ('>') + uint16LE(len) + payload
+      App Radio: 0x3C ('<') + uint16LE(len) + payload
+      Radio App: 0x3E ('>') + uint16LE(len) + payload
 
-    Handshake: send CMD_APP_START → receive PACKET_SELF_INFO.
+    Handshake: send CMD_APP_START  receive PACKET_SELF_INFO.
     Unsolicited PACKET_MESSAGES_WAITING triggers automatic polling.
     """
 

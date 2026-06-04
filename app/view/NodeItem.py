@@ -1,19 +1,21 @@
 from PyQt6.QtWidgets import (
-    QGraphicsEllipseItem, QMenu, QGraphicsTextItem, QApplication, QGraphicsRectItem
+    QGraphicsEllipseItem, QGraphicsItem, QMenu, QGraphicsTextItem,
+    QApplication, QGraphicsRectItem
 )
-from PyQt6.QtGui import QPen, QContextMenuEvent, QBrush, QFont
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPen, QContextMenuEvent, QBrush, QFont, QColor
+from PyQt6.QtCore import Qt, QTimer, QRectF
 from model.Node import Node, State, status_text
 NODE_RADIUS = 25
 STATUS_RADIUS = 4
 LABEL_OFFSET_Y = NODE_RADIUS + 6
+_RX_OVERLAY_Y = LABEL_OFFSET_Y + 22  # below the status labels
 
 color_status_dict = {
     State.CREATED  : Qt.GlobalColor.gray,
-    State.STARTING : Qt.GlobalColor.yellow,
-    State.RUNNING  : Qt.GlobalColor.green,
+    State.STARTING : Qt.GlobalColor.darkYellow,
+    State.RUNNING  : Qt.GlobalColor.darkGreen,
     State.STOPPED  : Qt.GlobalColor.blue,
-    State.STOPPING : Qt.GlobalColor.yellow,
+    State.STOPPING : Qt.GlobalColor.darkYellow,
     State.ERROR    : Qt.GlobalColor.red,
 }
 
@@ -28,7 +30,8 @@ class NodeItem(QGraphicsEllipseItem):
         self.setPen(QPen(Qt.GlobalColor.black, 2))
         self.setFlags(
             QGraphicsEllipseItem.GraphicsItemFlag.ItemIsMovable |
-            QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable
+            QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable |
+            QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations
         )
         self.setAcceptedMouseButtons(Qt.MouseButton.AllButtons)
         self.setPos(model.x, model.y)
@@ -58,11 +61,40 @@ class NodeItem(QGraphicsEllipseItem):
             self
         )
 
+        # Spinner animation (shown while state is STARTING / STOPPING)
+        self._spin_angle = 0
+        self._spin_timer = QTimer()
+        self._spin_timer.setInterval(40)   # ~25 fps
+        self._spin_timer.timeout.connect(self._tick_spinner)
+
         self.setStatus(model.state)
 
         self._layout_labels()
+
+        # RX info overlay (SNR / RSSI), hidden by default
+        self._rx_bg = QGraphicsRectItem(self)
+        self._rx_bg.setBrush(QBrush(QColor(0, 0, 0, 170)))
+        self._rx_bg.setPen(QPen(QColor(80, 160, 255, 180), 1))
+        self._rx_bg.setZValue(2)
+        self._rx_bg.setVisible(False)
+
+        rx_font = QFont("Monospace", 8)
+        self._rx_label = QGraphicsTextItem(self)
+        self._rx_label.setFont(rx_font)
+        self._rx_label.setDefaultTextColor(Qt.GlobalColor.white)
+        self._rx_label.setZValue(3)
+        self._rx_label.setVisible(False)
+
+        self._rx_hide_timer = QTimer()
+        self._rx_hide_timer.setSingleShot(True)
+        self._rx_hide_timer.setInterval(5000)
+        self._rx_hide_timer.timeout.connect(self._hide_rx_overlay)
     
-    def setStatus(self, state : State):
+    def _tick_spinner(self):
+        self._spin_angle = (self._spin_angle - 12) % 360  # counter-clockwise, 12°/tick
+        self.update()
+
+    def setStatus(self, state: State):
         color = color_status_dict[state]
         text = status_text[state]
 
@@ -74,8 +106,28 @@ class NodeItem(QGraphicsEllipseItem):
 
         self.model.state = state
 
+        # Spinner: run while the node is in a transient state
+        if state in (State.STARTING, State.STOPPING):
+            if not self._spin_timer.isActive():
+                self._spin_timer.start()
+        else:
+            self._spin_timer.stop()
+            self.update()  # repaint once to clear any leftover arc
+
         self._layout_labels()
-        QApplication.processEvents()
+
+    def paint(self, painter, option, widget=None):
+        super().paint(painter, option, widget)
+        if self._spin_timer.isActive():
+            r = NODE_RADIUS - 10
+            pen = QPen(QColor(255, 255, 255, 200), 3)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawArc(
+                QRectF(-r, -r, r * 2, r * 2),
+                self._spin_angle * 16,   # start angle  (Qt: 1/16 deg)
+                270 * 16,                # span: 270° arc
+            )
 
     def _layout_labels(self):
         name_rect = self.name_label.boundingRect()
@@ -111,6 +163,39 @@ class NodeItem(QGraphicsEllipseItem):
         bg_height = max(name_rect.height(), status_rect.height()) + 4
         self.label_bg.setRect(bg_x, bg_y, bg_width, bg_height)
 
+    def show_rx_result(self, snr: float, rssi: float,
+                       msg_str: str = "", raw_data: bytes = b"",
+                       want_response: bool = False):
+        """Show received-packet overlay: msg_str, raw_data, wantResponse, SNR, RSSI."""
+        import math
+        lines = []
+        if msg_str:
+            lines.append(msg_str[:48] + ("…" if len(msg_str) > 48 else ""))
+        if raw_data:
+            hex_s = raw_data[:8].hex(" ") + (" …" if len(raw_data) > 8 else "")
+            lines.append(f"raw:  {hex_s}")
+        lines.append(f"ack:  {want_response}")
+        snr_str  = f"{snr:+.1f} dB"  if (snr  != 0.0 and not math.isinf(snr))  else "N/A"
+        rssi_str = f"{rssi:.0f} dBm" if (rssi != 0.0 and not math.isinf(rssi)) else "N/A"
+        lines.append(f"SNR  {snr_str}")
+        lines.append(f"RSSI {rssi_str}")
+        text = "\n".join(lines)
+        self._rx_label.setPlainText(text)
+        r = self._rx_label.boundingRect()
+        margin = 4
+        self._rx_label.setPos(-r.width() / 2, _RX_OVERLAY_Y)
+        self._rx_bg.setRect(
+            -r.width() / 2 - margin, _RX_OVERLAY_Y - margin,
+            r.width() + margin * 2, r.height() + margin * 2,
+        )
+        self._rx_label.setVisible(True)
+        self._rx_bg.setVisible(True)
+        self._rx_hide_timer.start()
+
+    def _hide_rx_overlay(self):
+        self._rx_label.setVisible(False)
+        self._rx_bg.setVisible(False)
+
     def mouseReleaseEvent(self, event):
         self.controller.update_position(self, self.pos())
         super().mouseReleaseEvent(event)
@@ -140,15 +225,49 @@ class NodeItem(QGraphicsEllipseItem):
         act_web = menu.addAction("Open web interface")
         act_term = menu.addAction("Open terminal")
         act_setup_term = menu.addAction("Open setup terminal")
+        act_view_rx = menu.addAction("View received packets")
+
+        # API connect/disconnect + ping + send message — meshtastic only
+        act_api_connect = act_api_disconnect = None
+        act_pings = []      # [(QAction, target NodeItem)]
+        act_messages = []   # [(QAction, target NodeItem)]
+        if self.model.network_type == "meshtastic":
+            menu.addSeparator()
+            act_api_connect = menu.addAction("Connect Python API client")
+            act_api_disconnect = menu.addAction("Disconnect Python API client")
+
+            ping_menu = menu.addMenu("Send ping to...")
+            msg_menu  = menu.addMenu("Send message to...")
+            for other in self.controller.project.gui_nodes:
+                if other is self:
+                    continue
+                if other.model.state == State.RUNNING:
+                    label = f"{other.model.short_mac()}  (:{other.model.local_port})"
+                    act_pings.append((ping_menu.addAction(label), other))
+                    act_messages.append((msg_menu.addAction(label), other))
+            if not act_pings:
+                ping_menu.setEnabled(False)
+            if not act_messages:
+                msg_menu.setEnabled(False)
 
         # --- state logic ---
         is_running = self.model.state == State.RUNNING
+        api_connected = self.model.interface is not None
 
         act_enable.setEnabled(not is_running)
         act_disable.setEnabled(True)
 
         act_web.setEnabled(is_running)
         act_term.setEnabled(is_running)
+        act_view_rx.setEnabled(True)
+
+        if act_api_connect is not None:
+            act_api_connect.setEnabled(is_running and not api_connected)
+            act_api_disconnect.setEnabled(is_running and api_connected)
+            for act, _ in act_pings:
+                act.setEnabled(api_connected)
+            for act, _ in act_messages:
+                act.setEnabled(api_connected)
 
         # --- execute ---
         action = menu.exec(event.screenPos())
@@ -169,7 +288,26 @@ class NodeItem(QGraphicsEllipseItem):
             self.controller.open_web(self)
 
         elif action == act_term:
-            self.controller.open_terminal(self,False)
+            self.controller.open_terminal(self, False)
 
         elif action == act_setup_term:
-            self.controller.open_terminal(self,True)
+            self.controller.open_terminal(self, True)
+
+        elif action == act_view_rx:
+            self.controller.show_received(self)
+
+        elif act_api_connect is not None and action == act_api_connect:
+            self.controller.connect_api_client(self)
+
+        elif act_api_disconnect is not None and action == act_api_disconnect:
+            self.controller.disconnect_api_client(self)
+
+        else:
+            for act_ping, target_item in act_pings:
+                if action == act_ping:
+                    self.controller.send_ping(self, target_item)
+                    break
+            for act_msg, target_item in act_messages:
+                if action == act_msg:
+                    self.controller.send_message_dialog(self, target_item)
+                    break

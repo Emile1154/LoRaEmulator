@@ -1,4 +1,4 @@
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from enum import Enum
 import docker
 import os
@@ -7,9 +7,9 @@ import threading
 import time
 import traceback
 from datetime import timedelta
-from meshtastic import mesh_pb2, config_pb2
-from pubsub import pub
+from meshtastic import config_pb2
 from meshtastic.tcp_interface import TCPInterface
+from pubsub import pub
 from model.meshcore_client import MeshCoreCompanionClient
 
 class State(Enum):
@@ -59,11 +59,12 @@ class Node:
     slots_count : int
     modem_preset : str
     network_type : str  # "meshtastic" | "meshcore"
+    noise_std : float
 
     def __init__(self, x=0, y=0, MAC_address="", local_port=8000, remote_port=8002, web_port=9000, tcp_port=4403,
                  state=None, frequency=0, bandwidth=0, code_rate=0, spreading_factor=0,
                  ldro_enable=False, region="UNSET", slots_count=0, modem_preset="LONG_FAST",
-                 network_type="meshtastic"):
+                 network_type="meshtastic", noise_std=2e-6):
         self.local_port = local_port
         self.remote_port = remote_port
         self.web_port = web_port
@@ -84,16 +85,22 @@ class Node:
         self.slots_count = slots_count
         self.modem_preset = modem_preset
         self.network_type = network_type
+        self.noise_std = noise_std
 
         self.container_name = f"node_{self.short_mac()}"
         self.start_time = None
         self.interface = None
+        self.log_fn = None
+        self.packet_received_cb = None  # set by PacketMonitor
 
     def short_mac(self):
         return self.MAC_address[-4:]
 
     def logger(self, msg, tag: str):
-        print(f"[{tag}][{self.container_name}]({status_text[self.state]}): {msg}")
+        line = f"[{tag}][{self.container_name}]({status_text[self.state]}): {msg}"
+        print(line)
+        if self.log_fn:
+            self.log_fn(line)
 
     def _start_crash_monitor(self, container, on_crash):
         """Stream container logs into a rolling buffer; fire on_crash if container exits unexpectedly."""
@@ -114,12 +121,12 @@ class Node:
 
         threading.Thread(target=_monitor, daemon=True, name=f"monitor_{self.container_name}").start()
 
-    def enable(self, on_crash=None):
+    def enable(self, on_crash=None, on_started=None):
         if self.network_type == "meshcore":
-            return self._enable_meshcore(on_crash)
-        return self._enable_meshtastic(on_crash)
+            return self._enable_meshcore(on_crash, on_started)
+        return self._enable_meshtastic(on_crash, on_started)
 
-    def _enable_meshtastic(self, on_crash=None):
+    def _enable_meshtastic(self, on_crash=None, on_started=None):
         client = docker.from_env()
         workspace_path = PROJECT_ROOT
 
@@ -195,12 +202,14 @@ class Node:
             self.logger(f"container {self.container_name} started (pid={container.attrs['State']['Pid']})", "INFO")
             self._start_crash_monitor(container, on_crash)
             self.open_shell()
+            if on_started:
+                on_started()
             time.sleep(15)
             self.init_meshtastic_client()
             return 0
         return 0
 
-    def _enable_meshcore(self, on_crash=None):
+    def _enable_meshcore(self, on_crash=None, on_started=None):
         client = docker.from_env()
         workspace_path = PROJECT_ROOT
 
@@ -284,6 +293,8 @@ class Node:
             self.logger(f"container {self.container_name} started (pid={container.attrs['State']['Pid']})", "INFO")
             self._start_crash_monitor(container, on_crash)
             self.open_shell()
+            if on_started:
+                on_started()
             time.sleep(3)
             self.init_meshcore_client()
             return 0
@@ -292,13 +303,29 @@ class Node:
     def init_meshtastic_client(self):
         try:
             self.interface = TCPInterface(hostname="localhost", portNumber=self.tcp_port)
-            if not pub.isSubscribed(self.onConnection, "meshtastic.connection.established"):
-                pub.subscribe(self.onConnection, "meshtastic.connection.established")
-            self.logger(f"meshtastic TCP client initiated on port {self.tcp_port}", "INFO")
         except Exception as e:
-            self.logger(f"meshtastic TCP client failed to connect on port {self.tcp_port}: {e}", "ERROR")
+            self.logger(f"TCP connect failed on port {self.tcp_port}: {e}", "ERROR")
             self.logger(traceback.format_exc(), "ERROR")
             self.check_container_status()
+            return
+        
+        node = self.interface.localNode
+        if node is None:
+            self.logger("localNode not available after connect", "ERROR")
+            self.interface.close()
+            return
+        
+        self.logger(f"connected on port {self.tcp_port}, configuring radio", "INFO")
+        pub.subscribe(self.on_packet_receive, "meshtastic.receive")
+        node.setTime()
+
+        lc = node.localConfig
+        lc.lora.region = config_pb2.Config.LoRaConfig.RegionCode.RU
+        lc.lora.use_preset = True
+        lc.lora.modem_preset = config_pb2.Config.LoRaConfig.ModemPreset.LONG_FAST
+        node.writeConfig("lora")
+        time.sleep(2)
+        # Interface stays open — it is the permanent packet-receive monitor.
 
     def init_meshcore_client(self):
         client = MeshCoreCompanionClient(host="localhost", port=self.tcp_port)
@@ -318,41 +345,125 @@ class Node:
         else:
             self.logger(f"MeshCore companion failed to connect on port {self.tcp_port}", "ERROR")
             self.check_container_status()
+    
+    def on_packet_receive(self, packet, interface):
+        # self.logger(f"new packet received {packet}", "INFO")
+        if self.packet_received_cb is not None:
+            self.packet_received_cb(packet)
+    
+    def send_message(self, target: 'Node', text: str):
+        if self.interface is None:
+            self.logger("cannot send message: no active interface", "ERROR")
+            return
+        target_id = "!" + target.MAC_address.replace(":", "")[4:].lower()
+        try:
+            self.interface.sendText(text, destinationId=target_id)
+            self.logger(f"message {self.MAC_address} -> {target.MAC_address}: {text[:60]}", "INFO")
+        except Exception as e:
+            self.logger(f"send_message error: {e}", "ERROR")
 
-    def onConnection(self, interface, **kwargs):
-        # Guard: this topic is global — fires for every node's connection, not just ours.
-        if interface is not self.interface:
+    def send_ping(self, target: 'Node'):
+        if self.interface is None:
+            self.logger("cannot send ping: Python API client not connected", "ERROR")
             return
 
-        self.logger(f"connected to radio via TCP for container: {self.container_name}", "INFO")
-        node = self.interface.localNode
+        from meshtastic import portnums_pb2
 
-        # Sync device clock so rx_time is populated and nodes appear online.
-        # Without this, Docker containers often start with RTCQualityDevice < RTCQualityFromNet,
-        # causing getValidTime() to return 0 and last_heard to never update.
-        node.setTime()
+        target_4bytes = target.MAC_address.replace(':', '')[4:].lower()
+        target_node_id = f"!{target_4bytes}"
+        # Pattern seen in firmware log when the ACK routing packet arrives back at us
+        ack_log_marker = f"Received routing from=0x{target_4bytes}"
 
-        lc = node.localConfig
-        lc.lora.region = config_pb2.Config.LoRaConfig.RegionCode.RU
-        lc.lora.use_preset = True
-        lc.lora.modem_preset = config_pb2.Config.LoRaConfig.ModemPreset.LONG_FAST
+        self.logger(f"ping {self.MAC_address} -> {target.MAC_address} ...", "PING")
 
-        node.writeConfig("lora")
+        ack_event = threading.Event()
+        rtt_ref = [None]
+        t0_ref = [time.time()]
 
-        # Close the TCP interface after configuration so it stops draining toPhoneQueue.
-        # The firmware holds a single shared toPhoneQueue: if the Python TCPInterface stays
-        # connected it consumes every incoming radio packet in its background polling thread,
-        # leaving nothing for the web browser that polls /api/v1/fromradio.
-        # The web UI can still see nodes via nodeInfoForPhone (separate path), but text
-        # messages would be silently consumed by Python and never appear in the browser.
+        def _watch_logs():
+            try:
+                dc = docker.from_env()
+                container = dc.containers.get(self.container_name)
+                # since-1 to avoid missing logs on integer-second boundary
+                for raw in container.logs(
+                    stream=True, follow=True,
+                    since=max(0, int(t0_ref[0]) - 1),
+                ):
+                    if ack_event.is_set():
+                        return
+                    line = raw.decode("utf-8", errors="replace")
+                    if ack_log_marker in line:
+                        rtt_ref[0] = (time.time() - t0_ref[0]) * 1000
+                        ack_event.set()
+                        return
+            except Exception as e:
+                self.logger(f"log-watch error: {e}", "ERROR")
+
         try:
-            pub.unsubscribe(self.onConnection, "meshtastic.connection.established")
-        except Exception:
-            pass
-        self.interface.close()
-        self.interface = None
-        self.logger("TCP interface closed after config — web UI is now sole queue consumer", "INFO")
+            t0_ref[0] = time.time()
+            threading.Thread(
+                target=_watch_logs, daemon=True,
+                name=f"ping_watch_{self.container_name}"
+            ).start()
+            time.sleep(0.05)  # ensure log watcher is running before send
 
+            self.interface.sendData(
+                b"ping",
+                destinationId=target_node_id,
+                portNum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+                wantAck=True,
+            )
+
+            if ack_event.wait(timeout=30):
+                self.logger(
+                    f"ping {self.MAC_address} <- {target.MAC_address} RTT={rtt_ref[0]:.0f} ms", "PING"
+                )
+            else:
+                self.logger(
+                    f"ping timeout: {self.MAC_address} -> {target.MAC_address} (no ACK in 30 s)", "PING"
+                )
+        except Exception as e:
+            self.logger(f"ping {self.MAC_address} -> {target.MAC_address} error : {e}", "ERROR")
+        finally:
+            ack_event.set()  # stop log watcher
+
+    def connect_api_client(self):
+        if self.network_type != "meshtastic":
+            return
+        if self.interface is not None:
+            if getattr(self.interface, 'isConnected', False):
+                self.logger("Python API client already connected", "INFO")
+                return
+            # stale closed reference — clear it and reconnect
+            self.interface = None
+        for attempt in range(3):
+            try:
+                self.interface = TCPInterface(
+                    hostname="localhost",
+                    portNumber=self.tcp_port,
+                    timeout=60,
+                )
+                self.logger(f"Python API client connected on port {self.tcp_port}", "INFO")
+                return
+            except Exception as e:
+                self.interface = None
+                if attempt < 2:
+                    self.logger(f"connect attempt {attempt + 1}/3 failed: {e} — retrying in 5 s", "WARN")
+                    time.sleep(5)
+                else:
+                    self.logger(f"Python API client connect failed: {e}", "ERROR")
+
+    def disconnect_api_client(self):
+        if self.interface is None:
+            self.logger("Python API client is not connected", "INFO")
+            return
+        try:
+            self.interface.close()
+            self.interface = None
+            self.logger("Python API client disconnected", "INFO")
+        except Exception as e:
+            self.logger(f"Python API client disconnect error: {e}", "ERROR")
+            self.interface = None
 
     def check_container_status(self):
         client = docker.from_env()

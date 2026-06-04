@@ -16,16 +16,16 @@ class ProjectModel:
     def to_json(self) -> str:
         def serialize_node(node):
             data = asdict(node)
-            # Convert State enum to its integer value
-            data['state'] = node.state.value
+            data.pop('state', None)  # runtime state is not persisted
             return data
         return json.dumps([serialize_node(n) for n in self.nodes], indent=4)
 
     def from_json(self, text: str):
         self.clear()
         for item in json.loads(text):
-            # Convert state integer back to State enum
-            item['state'] = State(item['state'])
+            # Always start as CREATED — saved runtime state is meaningless after restart
+            item['state'] = State.CREATED
             # Backwards compatibility: old project files lack network_type
             item.setdefault('network_type', 'meshtastic')
+            item.setdefault('noise_std', 2e-6)
             self.nodes.append(Node(**item))
