@@ -1,5 +1,6 @@
 import sys
 
+from controller.BuildController import BuildController
 from controller.EmulationController import EmulationController
 from controller.NodeController import NodeController
 from controller.PacketMonitor import PacketMonitor
@@ -30,11 +31,13 @@ class MainWindow(QMainWindow):
         # Console tabs at the bottom
         self.emulation_console = self._make_console()
         self.node_console = self._make_console()
+        self.build_console = self._make_console()
 
         tab_widget = QTabWidget()
         tab_widget.setDocumentMode(True)
         tab_widget.addTab(self.emulation_console, "Emulation")
         tab_widget.addTab(self.node_console, "Nodes")
+        tab_widget.addTab(self.build_console, "Build")
         tab_widget.setMinimumHeight(60)
 
         # Splitter: map on top, console on bottom
@@ -49,7 +52,10 @@ class MainWindow(QMainWindow):
 
         self.node_controller = NodeController(self.project_model, self.scene, self.node_console)
         self.project_controller = ProjectController(self.project_model, self.node_controller, self.scene)
-        self.emulation_controller = EmulationController(self.project_model, self.emulation_console)
+        self.emulation_controller = EmulationController(
+            self.project_model, self.emulation_console, self.build_console
+        )
+        self.build_controller = BuildController(self.build_console)
 
         self.scene.node_controller = self.node_controller
 
@@ -98,6 +104,7 @@ class MainWindow(QMainWindow):
 
         menu_options = self.menuBar().addMenu("Options")
         menu_options.addAction("Rebuild channel emulator", self.emulation_controller.rebuild)
+        menu_options.addAction("Rebuild Meshtastic firmware", self.build_controller.rebuild_meshtastic)
 
         self._goto_menu = menu_options.addMenu("Go to node")
         self._goto_menu.aboutToShow.connect(self._rebuild_goto_menu)
@@ -129,17 +136,23 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda *_, it=item: self.view.centerOn(it.pos()))
 
     def _on_packet_event(self, tx_idx: int, rx_idx: int, snr: float, rssi: float,
-                         msg_str: str, raw_data: object, want_response: bool):
+                         msg_str: str, raw_data: object, want_response: bool, is_tx: bool):
         items = self.project_model.gui_nodes
-        if 0 <= rx_idx < len(items):
-            raw = raw_data if isinstance(raw_data, bytes) else b""
-            items[rx_idx].show_rx_result(snr, rssi, msg_str, raw, want_response)
-        if (0 <= tx_idx < len(items) and tx_idx != rx_idx
-                and 0 <= rx_idx < len(items)):
+        raw = raw_data if isinstance(raw_data, bytes) else b""
+        if is_tx:
+            if 0 <= tx_idx < len(items):
+                items[tx_idx].show_packet_info("TX", snr, rssi, msg_str, raw, want_response)
+        else:
+            if 0 <= rx_idx < len(items):
+                items[rx_idx].show_packet_info("RX", snr, rssi, msg_str, raw, want_response)
+        if 0 <= tx_idx < len(items) and tx_idx != rx_idx and 0 <= rx_idx < len(items):
+            from PyQt6.QtGui import QColor
+            color = QColor(255, 160, 0) if is_tx else QColor(60, 180, 255)
             arrow = PacketArrow(
                 self.scene,
                 items[tx_idx].pos(),
                 items[rx_idx].pos(),
+                color=color,
                 on_done=self._active_arrows.remove,
             )
             self._active_arrows.append(arrow)

@@ -19,17 +19,22 @@ _LORASDR_PATH = os.path.join(_WORKSPACE, "LoRaSDR")
 
 class EmulationController(QObject):
     _log_line          = pyqtSignal(str)
+    _build_log_line    = pyqtSignal(str)
     _build_done        = pyqtSignal(bool)   # True = success
     _show_rust_alert   = pyqtSignal()
 
-    def __init__(self, project_model: ProjectModel, console: QPlainTextEdit | None = None):
+    def __init__(self, project_model: ProjectModel,
+                 console: QPlainTextEdit | None = None,
+                 build_console: QPlainTextEdit | None = None):
         super().__init__()
         self.project = project_model
         self.running = False
         self._process: subprocess.Popen | None = None
         self._tmp_path: str | None = None
         self._console = console
+        self._build_console = build_console
         self._log_line.connect(self._append_log)
+        self._build_log_line.connect(self._append_build_log)
         self._build_done.connect(self._on_build_done)
         self._show_rust_alert.connect(self._alert_install_rust)
 
@@ -38,6 +43,14 @@ class EmulationController(QObject):
             return
         self._console.appendPlainText(line)
         sb = self._console.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _append_build_log(self, line: str):
+        target = self._build_console if self._build_console is not None else self._console
+        if target is None:
+            return
+        target.appendPlainText(line)
+        sb = target.verticalScrollBar()
         sb.setValue(sb.maximum())
 
     def _read_stdout(self):
@@ -65,7 +78,7 @@ class EmulationController(QObject):
 
     def _build_binary(self):
         """Background thread: cargo build, then emit _build_done."""
-        self._log_line.emit("[EmulationController] Building channel_process (this may take a minute)...")
+        self._build_log_line.emit("[Build] Building channel_process (this may take a minute)...")
         proc = subprocess.Popen(
             ["cargo", "build", "--bin", "channel_process"],
             cwd=_LORASDR_PATH,
@@ -73,13 +86,13 @@ class EmulationController(QObject):
             stderr=subprocess.STDOUT,
         )
         for raw in proc.stdout:
-            self._log_line.emit(raw.decode("utf-8", errors="replace").rstrip())
+            self._build_log_line.emit(raw.decode("utf-8", errors="replace").rstrip())
         proc.wait()
         if proc.returncode == 0:
-            self._log_line.emit("[EmulationController] Build successful")
+            self._build_log_line.emit("[Build] channel_process build successful")
             self._build_done.emit(True)
         else:
-            self._log_line.emit(f"[EmulationController] Build failed (exit={proc.returncode})")
+            self._build_log_line.emit(f"[Build] channel_process build failed (exit={proc.returncode})")
             self._build_done.emit(False)
 
     def start(self):

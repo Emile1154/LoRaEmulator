@@ -8,7 +8,8 @@ from model.Node import Node, State, status_text
 NODE_RADIUS = 25
 STATUS_RADIUS = 4
 LABEL_OFFSET_Y = NODE_RADIUS + 6
-_RX_OVERLAY_Y = LABEL_OFFSET_Y + 22  # below the status labels
+_RX_OVERLAY_Y = LABEL_OFFSET_Y + 22   # below the status labels
+_TX_OVERLAY_Y = -(NODE_RADIUS + 80)   # above the node
 
 color_status_dict = {
     State.CREATED  : Qt.GlobalColor.gray,
@@ -71,17 +72,18 @@ class NodeItem(QGraphicsEllipseItem):
 
         self._layout_labels()
 
-        # RX info overlay (SNR / RSSI), hidden by default
+        overlay_font = QFont("Monospace", 8)
+
+        # RX overlay — below node
         self._rx_bg = QGraphicsRectItem(self)
         self._rx_bg.setBrush(QBrush(QColor(0, 0, 0, 170)))
         self._rx_bg.setPen(QPen(QColor(80, 160, 255, 180), 1))
         self._rx_bg.setZValue(2)
         self._rx_bg.setVisible(False)
 
-        rx_font = QFont("Monospace", 8)
         self._rx_label = QGraphicsTextItem(self)
-        self._rx_label.setFont(rx_font)
-        self._rx_label.setDefaultTextColor(Qt.GlobalColor.white)
+        self._rx_label.setFont(overlay_font)
+        self._rx_label.setDefaultTextColor(QColor(60, 180, 255))
         self._rx_label.setZValue(3)
         self._rx_label.setVisible(False)
 
@@ -89,6 +91,24 @@ class NodeItem(QGraphicsEllipseItem):
         self._rx_hide_timer.setSingleShot(True)
         self._rx_hide_timer.setInterval(5000)
         self._rx_hide_timer.timeout.connect(self._hide_rx_overlay)
+
+        # TX overlay — above node
+        self._tx_bg = QGraphicsRectItem(self)
+        self._tx_bg.setBrush(QBrush(QColor(0, 0, 0, 170)))
+        self._tx_bg.setPen(QPen(QColor(255, 160, 0, 180), 1))
+        self._tx_bg.setZValue(2)
+        self._tx_bg.setVisible(False)
+
+        self._tx_label = QGraphicsTextItem(self)
+        self._tx_label.setFont(overlay_font)
+        self._tx_label.setDefaultTextColor(QColor(255, 160, 0))
+        self._tx_label.setZValue(3)
+        self._tx_label.setVisible(False)
+
+        self._tx_hide_timer = QTimer()
+        self._tx_hide_timer.setSingleShot(True)
+        self._tx_hide_timer.setInterval(5000)
+        self._tx_hide_timer.timeout.connect(self._hide_tx_overlay)
     
     def _tick_spinner(self):
         self._spin_angle = (self._spin_angle - 12) % 360  # counter-clockwise, 12°/tick
@@ -166,35 +186,51 @@ class NodeItem(QGraphicsEllipseItem):
     def show_rx_result(self, snr: float, rssi: float,
                        msg_str: str = "", raw_data: bytes = b"",
                        want_response: bool = False):
-        """Show received-packet overlay: msg_str, raw_data, wantResponse, SNR, RSSI."""
+        self.show_packet_info("RX", snr, rssi, msg_str, raw_data, want_response)
+
+    def show_packet_info(self, direction: str, snr: float, rssi: float,
+                         msg_str: str = "", raw_data: bytes = b"",
+                         want_response: bool = False):
         import math
-        lines = []
+        is_tx = direction == "TX"
+        lines = [direction]
         if msg_str:
             lines.append(msg_str[:48] + ("…" if len(msg_str) > 48 else ""))
         if raw_data:
             hex_s = raw_data[:8].hex(" ") + (" …" if len(raw_data) > 8 else "")
             lines.append(f"raw:  {hex_s}")
         lines.append(f"ack:  {want_response}")
-        snr_str  = f"{snr:+.1f} dB"  if (snr  != 0.0 and not math.isinf(snr))  else "N/A"
-        rssi_str = f"{rssi:.0f} dBm" if (rssi != 0.0 and not math.isinf(rssi)) else "N/A"
-        lines.append(f"SNR  {snr_str}")
-        lines.append(f"RSSI {rssi_str}")
+        if not is_tx:
+            snr_str  = f"{snr:+.1f} dB"  if (snr  != 0.0 and not math.isinf(snr))  else "N/A"
+            rssi_str = f"{rssi:.0f} dBm" if (rssi != 0.0 and not math.isinf(rssi)) else "N/A"
+            lines.append(f"SNR  {snr_str}")
+            lines.append(f"RSSI {rssi_str}")
         text = "\n".join(lines)
-        self._rx_label.setPlainText(text)
-        r = self._rx_label.boundingRect()
+
+        if is_tx:
+            label, bg, timer, overlay_y = self._tx_label, self._tx_bg, self._tx_hide_timer, _TX_OVERLAY_Y
+        else:
+            label, bg, timer, overlay_y = self._rx_label, self._rx_bg, self._rx_hide_timer, _RX_OVERLAY_Y
+
+        label.setPlainText(text)
+        r = label.boundingRect()
         margin = 4
-        self._rx_label.setPos(-r.width() / 2, _RX_OVERLAY_Y)
-        self._rx_bg.setRect(
-            -r.width() / 2 - margin, _RX_OVERLAY_Y - margin,
+        label.setPos(-r.width() / 2, overlay_y)
+        bg.setRect(
+            -r.width() / 2 - margin, overlay_y - margin,
             r.width() + margin * 2, r.height() + margin * 2,
         )
-        self._rx_label.setVisible(True)
-        self._rx_bg.setVisible(True)
-        self._rx_hide_timer.start()
+        label.setVisible(True)
+        bg.setVisible(True)
+        timer.start()
 
     def _hide_rx_overlay(self):
         self._rx_label.setVisible(False)
         self._rx_bg.setVisible(False)
+
+    def _hide_tx_overlay(self):
+        self._tx_label.setVisible(False)
+        self._tx_bg.setVisible(False)
 
     def mouseReleaseEvent(self, event):
         self.controller.update_position(self, self.pos())

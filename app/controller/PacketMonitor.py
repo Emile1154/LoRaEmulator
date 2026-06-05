@@ -26,59 +26,69 @@ def _safe_float(val, default: float = 0.0) -> float:
 
 
 def _bytes_to_str(raw: bytes) -> str:
-    """Decode raw payload bytes to a printable string."""
     if not raw:
         return ""
     return raw.decode("utf-8", errors="replace")
 
 
 class PacketMonitor(QObject):
-    # tx_idx, rx_idx, snr_dB, rssi_dBm, msg_str, raw_data(object/bytes), want_response
-    packet_event = pyqtSignal(int, int, float, float, str, object, bool)
+    # tx_idx, rx_idx, snr_dB, rssi_dBm, msg_str, raw_data, want_response, is_tx
+    packet_event = pyqtSignal(int, int, float, float, str, object, bool, bool)
 
     def __init__(self, project_model):
         super().__init__()
         self._project = project_model
-        self._history: dict[int, deque] = {}  #  deque of records
+        self._history: dict[int, deque] = {}
 
     def register_node(self, node_model):
-        def _cb(packet):
-            self._handle(node_model, packet)
-        node_model.packet_received_cb = _cb
+        def _cb_rx(packet):
+            self._handle(node_model, packet, is_tx=False)
+        def _cb_tx(packet):
+            self._handle(node_model, packet, is_tx=True)
+        node_model.packet_received_cb = _cb_rx
+        node_model.packet_sent_cb = _cb_tx
 
     def get_history(self, node_model) -> list:
-        """Return a snapshot of received-packet records for node_model."""
         return list(self._history.get(id(node_model), []))
 
     def ensure_subscribed(self):
         pass
 
-    def _handle(self, node_model, packet):
+    def _handle(self, node_model, packet, is_tx: bool = False):
         nodes = self._project.gui_nodes
 
-        rx_idx = next(
-            (i for i, item in enumerate(nodes) if item.model is node_model), -1
-        )
-        if rx_idx == -1:
-            return
-
-        from_id = packet.get("from", 0)
-        tx_idx = next(
-            (i for i, item in enumerate(nodes)
-             if _node_id(item.model.MAC_address) == from_id),
-            -1,
-        )
+        if is_tx:
+            tx_idx = next(
+                (i for i, item in enumerate(nodes) if item.model is node_model), -1
+            )
+            to_id = packet.get("to", 0)
+            rx_idx = next(
+                (i for i, item in enumerate(nodes)
+                 if _node_id(item.model.MAC_address) == to_id),
+                -1,
+            )
+        else:
+            rx_idx = next(
+                (i for i, item in enumerate(nodes) if item.model is node_model), -1
+            )
+            if rx_idx == -1:
+                return
+            from_id = packet.get("from", 0)
+            tx_idx = next(
+                (i for i, item in enumerate(nodes)
+                 if _node_id(item.model.MAC_address) == from_id),
+                -1,
+            )
 
         snr  = _safe_float(packet.get("rxSnr")  or packet.get("rx_snr"))
         rssi = _safe_float(packet.get("rxRssi") or packet.get("rx_rssi"))
-        print(packet)
+
         if "decoded" in packet:
             decoded       = packet.get("decoded") or {}
             raw_data      = decoded.get("payload") or b""
             msg_str       = _bytes_to_str(raw_data)
             want_response = bool(packet.get("wantAck", False))
         else:
-            # encrypted direct message — no plaintext available
             enc = packet.get("encrypted", b"")
             try:
                 raw_data = base64.b64decode(enc) if isinstance(enc, str) else bytes(enc)
@@ -87,15 +97,16 @@ class PacketMonitor(QObject):
             msg_str       = _bytes_to_str(raw_data)
             want_response = packet.get("wantAck", False)
 
-        # Persist full record in RAM
         record = {
             "time":          datetime.datetime.now(),
             "tx_idx":        tx_idx,
+            "rx_idx":        rx_idx,
             "snr":           snr,
             "rssi":          rssi,
             "msg_str":       msg_str,
             "raw_data":      raw_data,
             "want_response": want_response,
+            "is_tx":         is_tx,
             "packet":        packet,
         }
         key = id(node_model)
@@ -103,4 +114,4 @@ class PacketMonitor(QObject):
             self._history[key] = deque(maxlen=MAX_HISTORY)
         self._history[key].append(record)
 
-        self.packet_event.emit(tx_idx, rx_idx, snr, rssi, msg_str, raw_data, want_response)
+        self.packet_event.emit(tx_idx, rx_idx, snr, rssi, msg_str, raw_data, want_response, is_tx)

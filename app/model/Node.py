@@ -92,6 +92,7 @@ class Node:
         self.interface = None
         self.log_fn = None
         self.packet_received_cb = None  # set by PacketMonitor
+        self.packet_sent_cb = None      # set by PacketMonitor
         self._ping_ack_event: threading.Event | None = None
         self._ping_t0: float | None = None
 
@@ -351,14 +352,20 @@ class Node:
             self.check_container_status()
     
     def on_packet_receive(self, packet, interface):
+        my_from_id = "!" + self.MAC_address.replace(":", "")[4:].lower()
+        if packet.get('fromId') == my_from_id:
+            if self.packet_sent_cb is not None:
+                self.packet_sent_cb(packet)
+            return 
         if interface is not self.interface:
             return
 
         portnum = packet.get('decoded', {}).get('portnum', '')
         if self._ping_ack_event is not None and portnum == 'ROUTING_APP':
             self._ping_ack_event.set()
-            
+            return
 
+        self.logger("new packet received", "INFO")
         if self.packet_received_cb is not None:
             self.packet_received_cb(packet)
     
