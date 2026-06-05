@@ -92,6 +92,8 @@ class Node:
         self.interface = None
         self.log_fn = None
         self.packet_received_cb = None  # set by PacketMonitor
+        self._ping_ack_event: threading.Event | None = None
+        self._ping_t0: float | None = None
 
     def short_mac(self):
         return self.MAC_address[-4:]
@@ -351,7 +353,12 @@ class Node:
     def on_packet_receive(self, packet, interface):
         if interface is not self.interface:
             return
-        self.logger(f"new packet received", "INFO")
+
+        portnum = packet.get('decoded', {}).get('portnum', '')
+        if self._ping_ack_event is not None and portnum == 'ROUTING_APP':
+            self._ping_ack_event.set()
+            
+
         if self.packet_received_cb is not None:
             self.packet_received_cb(packet)
     
@@ -375,42 +382,13 @@ class Node:
 
         target_4bytes = target.MAC_address.replace(':', '')[4:].lower()
         target_node_id = f"!{target_4bytes}"
-        # Pattern seen in firmware log when the ACK routing packet arrives back at us
-        ack_log_marker = f"Received routing from=0x{target_4bytes}"
 
         self.logger(f"ping {self.MAC_address} -> {target.MAC_address} ...", "PING")
 
-        ack_event = threading.Event()
-        rtt_ref = [None]
-        t0_ref = [time.time()]
-
-        def _watch_logs():
-            try:
-                dc = docker.from_env()
-                container = dc.containers.get(self.container_name)
-                # since-1 to avoid missing logs on integer-second boundary
-                for raw in container.logs(
-                    stream=True, follow=True,
-                    since=max(0, int(t0_ref[0]) - 1),
-                ):
-                    if ack_event.is_set():
-                        return
-                    line = raw.decode("utf-8", errors="replace")
-                    if ack_log_marker in line:
-                        rtt_ref[0] = (time.time() - t0_ref[0]) * 1000
-                        ack_event.set()
-                        return
-            except Exception as e:
-                self.logger(f"log-watch error: {e}", "ERROR")
+        self._ping_ack_event = threading.Event()
+        self._ping_t0 = time.time()
 
         try:
-            t0_ref[0] = time.time()
-            threading.Thread(
-                target=_watch_logs, daemon=True,
-                name=f"ping_watch_{self.container_name}"
-            ).start()
-            time.sleep(0.05)  # ensure log watcher is running before send
-
             self.interface.sendData(
                 b"ping",
                 destinationId=target_node_id,
@@ -418,18 +396,20 @@ class Node:
                 wantAck=True,
             )
 
-            if ack_event.wait(timeout=30):
+            if self._ping_ack_event.wait(timeout=30):
+                rtt = (time.time() - self._ping_t0) * 1000
                 self.logger(
-                    f"ping {self.MAC_address} <- {target.MAC_address} RTT={rtt_ref[0]:.0f} ms", "PING"
+                    f"ping {self.MAC_address} <- {target.MAC_address} RTT={rtt:.0f} ms", "PING"
                 )
             else:
                 self.logger(
                     f"ping timeout: {self.MAC_address} -> {target.MAC_address} (no ACK in 30 s)", "PING"
                 )
         except Exception as e:
-            self.logger(f"ping {self.MAC_address} -> {target.MAC_address} error : {e}", "ERROR")
+            self.logger(f"ping {self.MAC_address} -> {target.MAC_address} error: {e}", "ERROR")
         finally:
-            ack_event.set()  # stop log watcher
+            self._ping_ack_event = None
+            self._ping_t0 = None
 
     def connect_api_client(self):
         if self.network_type != "meshtastic":

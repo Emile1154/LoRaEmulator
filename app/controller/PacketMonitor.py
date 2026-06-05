@@ -76,7 +76,7 @@ class PacketMonitor(QObject):
             decoded       = packet.get("decoded") or {}
             raw_data      = decoded.get("payload") or b""
             msg_str       = _bytes_to_str(raw_data)
-            want_response = bool(decoded.get("wantResponse") or decoded.get("want_response"))
+            want_response = bool(packet.get("wantAck", False))
         else:
             # encrypted direct message — no plaintext available
             enc = packet.get("encrypted", b"")
@@ -85,7 +85,7 @@ class PacketMonitor(QObject):
             except Exception:
                 raw_data = b""
             msg_str       = _bytes_to_str(raw_data)
-            want_response = False
+            want_response = packet.get("wantAck", False)
 
         # Persist full record in RAM
         record = {

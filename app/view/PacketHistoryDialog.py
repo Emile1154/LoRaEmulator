@@ -53,10 +53,9 @@ class PacketHistoryDialog(QDialog):
         self._detail = QPlainTextEdit()
         self._detail.setReadOnly(True)
         self._detail.setFont(QFont("Monospace", 9))
-        self._detail.setMaximumHeight(160)
         splitter.addWidget(self._detail)
 
-        splitter.setSizes([300, 160])
+        splitter.setSizes([300, 200])
         layout.addWidget(splitter)
 
         self._history: list = []
