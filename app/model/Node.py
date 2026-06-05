@@ -97,7 +97,9 @@ class Node:
         return self.MAC_address[-4:]
 
     def logger(self, msg, tag: str):
-        line = f"[{tag}][{self.container_name}]({status_text[self.state]}): {msg}"
+        from datetime import datetime
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        line = f"[{ts}][{tag}][{self.container_name}]({status_text[self.state]}): {msg}"
         print(line)
         if self.log_fn:
             self.log_fn(line)
@@ -347,7 +349,9 @@ class Node:
             self.check_container_status()
     
     def on_packet_receive(self, packet, interface):
-        # self.logger(f"new packet received {packet}", "INFO")
+        if interface is not self.interface:
+            return
+        self.logger(f"new packet received", "INFO")
         if self.packet_received_cb is not None:
             self.packet_received_cb(packet)
     
