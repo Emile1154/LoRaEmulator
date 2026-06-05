@@ -136,23 +136,27 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda *_, it=item: self.view.centerOn(it.pos()))
 
     def _on_packet_event(self, tx_idx: int, rx_idx: int, snr: float, rssi: float,
-                         msg_str: str, raw_data: object, want_response: bool, is_tx: bool):
+                         msg_str: str, raw_data: object, want_response: bool,
+                         is_tx: bool, show_overlay: bool):
+        from PyQt6.QtGui import QColor
         items = self.project_model.gui_nodes
         raw = raw_data if isinstance(raw_data, bytes) else b""
-        if is_tx:
-            if 0 <= tx_idx < len(items):
-                items[tx_idx].show_packet_info("TX", snr, rssi, msg_str, raw, want_response)
-        else:
-            if 0 <= rx_idx < len(items):
-                items[rx_idx].show_packet_info("RX", snr, rssi, msg_str, raw, want_response)
-        if 0 <= tx_idx < len(items) and tx_idx != rx_idx and 0 <= rx_idx < len(items):
-            from PyQt6.QtGui import QColor
-            color = QColor(255, 160, 0) if is_tx else QColor(60, 180, 255)
+        if show_overlay:
+            if is_tx:
+                if 0 <= tx_idx < len(items):
+                    items[tx_idx].show_packet_info("TX", snr, rssi, msg_str, raw, want_response)
+            else:
+                if 0 <= rx_idx < len(items):
+                    items[rx_idx].show_packet_info("RX", snr, rssi, msg_str, raw, want_response)
+        # TX events only show the overlay on the sender — no arrow, because
+        # the TX echo has no relay info and would draw a wrong direct path.
+        # The correct hop path is drawn entirely from RX events (which have relayNode).
+        if not is_tx and 0 <= tx_idx < len(items) and tx_idx != rx_idx and 0 <= rx_idx < len(items):
             arrow = PacketArrow(
                 self.scene,
                 items[tx_idx].pos(),
                 items[rx_idx].pos(),
-                color=color,
+                color=QColor(60, 180, 255),
                 on_done=self._active_arrows.remove,
             )
             self._active_arrows.append(arrow)

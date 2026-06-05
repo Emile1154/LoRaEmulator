@@ -32,8 +32,8 @@ def _bytes_to_str(raw: bytes) -> str:
 
 
 class PacketMonitor(QObject):
-    # tx_idx, rx_idx, snr_dB, rssi_dBm, msg_str, raw_data, want_response, is_tx
-    packet_event = pyqtSignal(int, int, float, float, str, object, bool, bool)
+    # tx_idx, rx_idx, snr, rssi, msg_str, raw_data, want_response, is_tx, show_overlay
+    packet_event = pyqtSignal(int, int, float, float, str, object, bool, bool, bool)
 
     def __init__(self, project_model):
         super().__init__()
@@ -114,4 +114,35 @@ class PacketMonitor(QObject):
             self._history[key] = deque(maxlen=MAX_HISTORY)
         self._history[key].append(record)
 
-        self.packet_event.emit(tx_idx, rx_idx, snr, rssi, msg_str, raw_data, want_response, is_tx)
+        if not is_tx:
+            # Hop path: relayNode = last byte of the node that last transmitted this
+            # packet. If it differs from the original sender, emit an extra arrow-only
+            # event for the first leg (no overlay — overlay always stays on the true
+            # receiver so it doesn't get lost when relay logic kicks in).
+            relay_byte = packet.get("relayNode", 0)
+            relay_idx = -1
+            if relay_byte:
+                relay_idx = next(
+                    (i for i, item in enumerate(nodes)
+                     if (_node_id(item.model.MAC_address) & 0xFF) == relay_byte),
+                    -1,
+                )
+
+            if relay_idx != -1 and relay_idx != tx_idx and relay_idx != rx_idx:
+                # Arrow-only for first leg A→relay (no overlay on relay from here;
+                # relay's own RX handler will show it when its callback fires)
+                self.packet_event.emit(
+                    tx_idx, relay_idx, 0.0, 0.0, "", b"", False, False, False
+                )
+                # Final leg relay→B with RX overlay on B
+                self.packet_event.emit(
+                    relay_idx, rx_idx, snr, rssi,
+                    msg_str, raw_data, want_response, False, True
+                )
+                return
+
+        # Direct path or TX echo: full event with overlay
+        self.packet_event.emit(
+            tx_idx, rx_idx, snr, rssi,
+            msg_str, raw_data, want_response, is_tx, True
+        )
