@@ -10,11 +10,11 @@ from PyQt6.QtWidgets import (
     QLabel, QSplitter, QPlainTextEdit, QTabWidget
 )
 from PyQt6.QtCore import Qt
-import PyQt6.QtGui as QtGui
+from PyQt6.QtGui import QColor, QFont, QKeySequence, QAction
 from model.Project import ProjectModel
 from view.GraphicsView import GraphicsView
 from view.MapScene import MapScene
-from view.PacketAnimation import PacketArrow
+from view.PacketAnimation import PacketTracker
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -65,16 +65,17 @@ class MainWindow(QMainWindow):
         self._create_menu()
 
         # Packet animation via meshtastic Python API
-        self._active_arrows: list = []   # keeps PacketArrow alive during animation
+        self._packet_tracker = PacketTracker(self.scene)
         self.packet_monitor = PacketMonitor(self.project_model)
         self.node_controller.packet_monitor = self.packet_monitor
-        self.packet_monitor.packet_event.connect(self._on_packet_event)
+        self.packet_monitor.overlay_event.connect(self._on_overlay_event)
+        self.packet_monitor.arrow_event.connect(self._on_arrow_event)
 
     def _make_console(self) -> QPlainTextEdit:
         w = QPlainTextEdit()
         w.setReadOnly(True)
         w.setMaximumBlockCount(2000)
-        w.setFont(QtGui.QFont("Monospace", 9))
+        w.setFont(QFont("Monospace", 9))
         w.setStyleSheet("QPlainTextEdit { background: #1e1e1e; color: #d4d4d4; border: none; }")
         return w
 
@@ -91,8 +92,8 @@ class MainWindow(QMainWindow):
 
         menu_file.addSeparator()
 
-        save_action = QtGui.QAction("Save", self)
-        save_action.setShortcut(QtGui.QKeySequence("Ctrl+S"))
+        save_action = QAction("Save", self)
+        save_action.setShortcut(QKeySequence("Ctrl+S"))
         save_action.triggered.connect(lambda: self.project_controller.save_project(self))
         menu_file.addAction(save_action)
 
@@ -135,31 +136,37 @@ class MainWindow(QMainWindow):
             action = self._goto_menu.addAction(label)
             action.triggered.connect(lambda *_, it=item: self.view.centerOn(it.pos()))
 
-    def _on_packet_event(self, tx_idx: int, rx_idx: int, snr: float, rssi: float,
-                         msg_str: str, raw_data: object, want_response: bool,
-                         is_tx: bool, show_overlay: bool):
-        from PyQt6.QtGui import QColor
+    def _on_overlay_event(self, node_idx: int, kind: str, snr: float, rssi: float,
+                          msg_str: str, raw_data: object, want_ack: bool):
         items = self.project_model.gui_nodes
+        if not (0 <= node_idx < len(items)):
+            return
         raw = raw_data if isinstance(raw_data, bytes) else b""
-        if show_overlay:
-            if is_tx:
-                if 0 <= tx_idx < len(items):
-                    items[tx_idx].show_packet_info("TX", snr, rssi, msg_str, raw, want_response)
-            else:
-                if 0 <= rx_idx < len(items):
-                    items[rx_idx].show_packet_info("RX", snr, rssi, msg_str, raw, want_response)
-        # TX events only show the overlay on the sender — no arrow, because
-        # the TX echo has no relay info and would draw a wrong direct path.
-        # The correct hop path is drawn entirely from RX events (which have relayNode).
-        if not is_tx and 0 <= tx_idx < len(items) and tx_idx != rx_idx and 0 <= rx_idx < len(items):
-            arrow = PacketArrow(
-                self.scene,
-                items[tx_idx].pos(),
-                items[rx_idx].pos(),
-                color=QColor(60, 180, 255),
-                on_done=self._active_arrows.remove,
-            )
-            self._active_arrows.append(arrow)
+        items[node_idx].show_packet_info(kind, snr, rssi, msg_str, raw, want_ack)
+
+    def _on_arrow_event(self, action: str, a_idx: int, b_idx: int, key: str):
+        # Confirmation / delivery commands are matched purely by key.
+        if action == "confirm":
+            self._packet_tracker.confirm(key)
+            return
+        if action == "delivered":
+            self._packet_tracker.delivered(key)
+            return
+
+        # Arrow-creating commands need both endpoints on screen.
+        items = self.project_model.gui_nodes
+        if not (0 <= a_idx < len(items) and 0 <= b_idx < len(items)) or a_idx == b_idx:
+            return
+        a_pos, b_pos = items[a_idx].pos(), items[b_idx].pos()
+
+        on_missed = None
+        if action == "data":
+            def on_missed(_arrow, idx=b_idx):
+                its = self.project_model.gui_nodes
+                if 0 <= idx < len(its):
+                    its[idx].show_packet_info("MISSED", 0.0, 0.0, "", b"", False)
+
+        self._packet_tracker.add(action, key, a_pos, b_pos, on_missed=on_missed)
 
     def closeEvent(self, event):
         self.node_controller.shutdown_all()

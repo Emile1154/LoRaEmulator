@@ -10,6 +10,9 @@ STATUS_RADIUS = 4
 LABEL_OFFSET_Y = NODE_RADIUS + 6
 _RX_OVERLAY_Y = LABEL_OFFSET_Y + 22   # below the status labels
 _TX_OVERLAY_Y = -(NODE_RADIUS + 80)   # above the node
+_RETX_OVERLAY_Y = -(NODE_RADIUS + 10)  # near node for retransmission
+_MISSED_OVERLAY_Y = -(NODE_RADIUS + 80)  # above the node (like TX)
+_ACK_OVERLAY_Y = LABEL_OFFSET_Y + 22   # below the status labels (like RX)
 
 color_status_dict = {
     State.CREATED  : Qt.GlobalColor.gray,
@@ -109,7 +112,61 @@ class NodeItem(QGraphicsEllipseItem):
         self._tx_hide_timer.setSingleShot(True)
         self._tx_hide_timer.setInterval(5000)
         self._tx_hide_timer.timeout.connect(self._hide_tx_overlay)
-    
+
+        # RETX overlay — for relay/retransmission (green color)
+        self._retx_bg = QGraphicsRectItem(self)
+        self._retx_bg.setBrush(QBrush(QColor(0, 0, 0, 170)))
+        self._retx_bg.setPen(QPen(QColor(0, 200, 0, 180), 1))
+        self._retx_bg.setZValue(2)
+        self._retx_bg.setVisible(False)
+
+        self._retx_label = QGraphicsTextItem(self)
+        self._retx_label.setFont(overlay_font)
+        self._retx_label.setDefaultTextColor(QColor(0, 255, 100))
+        self._retx_label.setZValue(3)
+        self._retx_label.setVisible(False)
+
+        self._retx_hide_timer = QTimer()
+        self._retx_hide_timer.setSingleShot(True)
+        self._retx_hide_timer.setInterval(5000)
+        self._retx_hide_timer.timeout.connect(self._hide_retx_overlay)
+
+        # MISSED overlay — above node (red), shown on delivery timeout
+        self._missed_bg = QGraphicsRectItem(self)
+        self._missed_bg.setBrush(QBrush(QColor(0, 0, 0, 170)))
+        self._missed_bg.setPen(QPen(QColor(255, 60, 60, 200), 1))
+        self._missed_bg.setZValue(2)
+        self._missed_bg.setVisible(False)
+
+        self._missed_label = QGraphicsTextItem(self)
+        self._missed_label.setFont(overlay_font)
+        self._missed_label.setDefaultTextColor(QColor(255, 80, 80))
+        self._missed_label.setZValue(3)
+        self._missed_label.setVisible(False)
+
+        self._missed_hide_timer = QTimer()
+        self._missed_hide_timer.setSingleShot(True)
+        self._missed_hide_timer.setInterval(5000)
+        self._missed_hide_timer.timeout.connect(self._hide_missed_overlay)
+
+        # ACK overlay — below node (violet), shown when the ACK reaches the sender
+        self._ack_bg = QGraphicsRectItem(self)
+        self._ack_bg.setBrush(QBrush(QColor(0, 0, 0, 170)))
+        self._ack_bg.setPen(QPen(QColor(180, 120, 255, 200), 1))
+        self._ack_bg.setZValue(2)
+        self._ack_bg.setVisible(False)
+
+        self._ack_label = QGraphicsTextItem(self)
+        self._ack_label.setFont(overlay_font)
+        self._ack_label.setDefaultTextColor(QColor(180, 120, 255))
+        self._ack_label.setZValue(3)
+        self._ack_label.setVisible(False)
+
+        self._ack_hide_timer = QTimer()
+        self._ack_hide_timer.setSingleShot(True)
+        self._ack_hide_timer.setInterval(5000)
+        self._ack_hide_timer.timeout.connect(self._hide_ack_overlay)
+
     def _tick_spinner(self):
         self._spin_angle = (self._spin_angle - 12) % 360  # counter-clockwise, 12°/tick
         self.update()
@@ -192,7 +249,12 @@ class NodeItem(QGraphicsEllipseItem):
                          msg_str: str = "", raw_data: bytes = b"",
                          want_response: bool = False):
         import math
+        if direction == "MISSED":
+            self._show_missed()
+            return
         is_tx = direction == "TX"
+        is_retx = direction == "RETX"
+        is_ack = direction == "ACK"
         lines = [direction]
         if msg_str:
             lines.append(msg_str[:48] + ("…" if len(msg_str) > 48 else ""))
@@ -200,7 +262,7 @@ class NodeItem(QGraphicsEllipseItem):
             hex_s = raw_data[:8].hex(" ") + (" …" if len(raw_data) > 8 else "")
             lines.append(f"raw:  {hex_s}")
         lines.append(f"ack:  {want_response}")
-        if not is_tx:
+        if not is_tx and not is_retx:
             snr_str  = f"{snr:+.1f} dB"  if (snr  != 0.0 and not math.isinf(snr))  else "N/A"
             rssi_str = f"{rssi:.0f} dBm" if (rssi != 0.0 and not math.isinf(rssi)) else "N/A"
             lines.append(f"SNR  {snr_str}")
@@ -209,6 +271,10 @@ class NodeItem(QGraphicsEllipseItem):
 
         if is_tx:
             label, bg, timer, overlay_y = self._tx_label, self._tx_bg, self._tx_hide_timer, _TX_OVERLAY_Y
+        elif is_retx:
+            label, bg, timer, overlay_y = self._retx_label, self._retx_bg, self._retx_hide_timer, _RETX_OVERLAY_Y
+        elif is_ack:
+            label, bg, timer, overlay_y = self._ack_label, self._ack_bg, self._ack_hide_timer, _ACK_OVERLAY_Y
         else:
             label, bg, timer, overlay_y = self._rx_label, self._rx_bg, self._rx_hide_timer, _RX_OVERLAY_Y
 
@@ -231,6 +297,31 @@ class NodeItem(QGraphicsEllipseItem):
     def _hide_tx_overlay(self):
         self._tx_label.setVisible(False)
         self._tx_bg.setVisible(False)
+
+    def _hide_retx_overlay(self):
+        self._retx_label.setVisible(False)
+        self._retx_bg.setVisible(False)
+
+    def _show_missed(self):
+        self._missed_label.setPlainText("Packet Missed")
+        r = self._missed_label.boundingRect()
+        margin = 4
+        self._missed_label.setPos(-r.width() / 2, _MISSED_OVERLAY_Y)
+        self._missed_bg.setRect(
+            -r.width() / 2 - margin, _MISSED_OVERLAY_Y - margin,
+            r.width() + margin * 2, r.height() + margin * 2,
+        )
+        self._missed_label.setVisible(True)
+        self._missed_bg.setVisible(True)
+        self._missed_hide_timer.start()
+
+    def _hide_missed_overlay(self):
+        self._missed_label.setVisible(False)
+        self._missed_bg.setVisible(False)
+
+    def _hide_ack_overlay(self):
+        self._ack_label.setVisible(False)
+        self._ack_bg.setVisible(False)
 
     def mouseReleaseEvent(self, event):
         self.controller.update_position(self, self.pos())

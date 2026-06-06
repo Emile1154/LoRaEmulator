@@ -363,8 +363,7 @@ class Node:
         portnum = packet.get('decoded', {}).get('portnum', '')
         if self._ping_ack_event is not None and portnum == 'ROUTING_APP':
             self._ping_ack_event.set()
-            return
-
+            
         self.logger("new packet received", "INFO")
         if self.packet_received_cb is not None:
             self.packet_received_cb(packet)
