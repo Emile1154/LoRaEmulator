@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow,
     QLabel, QSplitter, QPlainTextEdit, QTabWidget
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QKeySequence, QAction
 from model.Project import ProjectModel
 from view.GraphicsView import GraphicsView
@@ -144,7 +144,8 @@ class MainWindow(QMainWindow):
         raw = raw_data if isinstance(raw_data, bytes) else b""
         items[node_idx].show_packet_info(kind, snr, rssi, msg_str, raw, want_ack)
 
-    def _on_arrow_event(self, action: str, a_idx: int, b_idx: int, key: str):
+    def _on_arrow_event(self, action: str, a_idx: int, b_idx: int, key: str,
+                        delay_ms: int):
         # Confirmation / delivery commands are matched purely by key.
         if action == "confirm":
             self._packet_tracker.confirm(key)
@@ -152,12 +153,14 @@ class MainWindow(QMainWindow):
         if action == "delivered":
             self._packet_tracker.delivered(key)
             return
+        if action == "cancel":
+            self._packet_tracker.cancel(key)
+            return
 
         # Arrow-creating commands need both endpoints on screen.
         items = self.project_model.gui_nodes
         if not (0 <= a_idx < len(items) and 0 <= b_idx < len(items)) or a_idx == b_idx:
             return
-        a_pos, b_pos = items[a_idx].pos(), items[b_idx].pos()
 
         on_missed = None
         if action == "data":
@@ -166,7 +169,17 @@ class MainWindow(QMainWindow):
                 if 0 <= idx < len(its):
                     its[idx].show_packet_info("MISSED", 0.0, 0.0, "", b"", False)
 
-        self._packet_tracker.add(action, key, a_pos, b_pos, on_missed=on_missed)
+        def _create():
+            its = self.project_model.gui_nodes
+            if not (0 <= a_idx < len(its) and 0 <= b_idx < len(its)):
+                return
+            self._packet_tracker.add(action, key, its[a_idx].pos(), its[b_idx].pos(),
+                                     on_missed=on_missed)
+
+        if delay_ms > 0:
+            QTimer.singleShot(delay_ms, _create)
+        else:
+            _create()
 
     def closeEvent(self, event):
         self.node_controller.shutdown_all()

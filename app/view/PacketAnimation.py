@@ -11,10 +11,10 @@ class PacketArrow:
     Line width and dot size are zoom-independent (cosmetic pen + ItemIgnoresTransformations).
 
     Roles:
-      * "data"  : end-to-end delivery arrow. Stays orange until confirmed
-                  (turns blue) or times out (turns red + "Packet Missed").
-      * "relay" : a single relay hop. Auto-confirms (blue) when the dot arrives.
-      * "ack"   : acknowledgement travelling back. Auto-confirms when it arrives.
+      * "data" : provisional origin->dest arrow. Stays orange until confirmed
+                 (turns blue) or times out (turns red + "Packet Missed").
+      * "hop"  : a single data relay hop. Auto-turns blue when the dot arrives.
+      * "ack"  : an acknowledgement hop. Auto-turns violet when it arrives.
     """
     _STEP_MS  = 30
     _DURATION = 1100
@@ -41,7 +41,7 @@ class PacketArrow:
         self._color = self.COLOR_PENDING
         self._state = "pending"  # pending, success, timeout
         self._delivered = False
-        self._auto_success = role in ("relay", "ack")
+        self._auto_success = role in ("hop", "ack")
 
         width = 2 if role == "data" else 1
         line_pen = QPen(QColor(self._color.red(), self._color.green(),
@@ -79,9 +79,9 @@ class PacketArrow:
         self._p += self._STEP_MS / self._DURATION
         if self._p >= 1.0:
             self._dot.setVisible(False)
-            # Relay / ACK hops are confirmed the moment they arrive.
+            # Hops are confirmed the moment they arrive.
             if self._auto_success and self._state == "pending":
-                self.set_state(self._role)
+                self.set_state("ack" if self._role == "ack" else "success")
             return
         t = self._p
         self._dot.setPos(
@@ -158,7 +158,7 @@ class PacketTracker:
         self._scene = scene
         self._arrows: list[PacketArrow] = []
         self._by_key: dict[str, PacketArrow] = {}
-        self._tx_timeout_ms = 5000
+        self._tx_timeout_ms = 20000  # emulator round-trips can take >10 s
 
     def add(self, action: str, key: str, a_pos: QPointF, b_pos: QPointF,
             on_missed: Callable | None = None) -> PacketArrow:
@@ -190,6 +190,13 @@ class PacketTracker:
         arrow = self._by_key.get(key)
         if arrow is not None:
             arrow.mark_delivered()
+
+    def cancel(self, key: str):
+        """Silently remove a keyed arrow (e.g. the provisional direct arrow
+        once the packet turns out to be multi-hop)."""
+        arrow = self._by_key.pop(key, None)
+        if arrow is not None:
+            arrow._cleanup()
 
     def _remove_arrow(self, arrow: PacketArrow):
         if arrow in self._arrows:
