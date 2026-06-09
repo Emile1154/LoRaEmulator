@@ -20,10 +20,11 @@ _LORASDR_PATH = os.path.join(_WORKSPACE, "LoRaSDR")
 
 
 class EmulationController(QObject):
-    _log_line          = pyqtSignal(str)
-    _build_log_line    = pyqtSignal(str)
-    _build_done        = pyqtSignal(bool)   # True = success
-    _show_rust_alert   = pyqtSignal()
+    _log_line             = pyqtSignal(str)
+    _build_log_line       = pyqtSignal(str)
+    _build_done           = pyqtSignal(bool)            # True = success
+    _show_rust_alert      = pyqtSignal()
+    _spectrum_build_done  = pyqtSignal(bool, int, str)  # success, ws-port, title
 
     def __init__(self, project_model: ProjectModel,
                  console: QPlainTextEdit | None = None,
@@ -43,6 +44,7 @@ class EmulationController(QObject):
         self._build_log_line.connect(self._append_build_log)
         self._build_done.connect(self._on_build_done)
         self._show_rust_alert.connect(self._alert_install_rust)
+        self._spectrum_build_done.connect(self._on_spectrum_build_done)
 
     def _append_log(self, line: str):
         if self._console is None:
@@ -98,23 +100,67 @@ class EmulationController(QObject):
                 f"(local_port={node_model.local_port})"
             )
             return
+        title = node_model.short_mac()
         if not os.path.isfile(SPECTRUM_BIN_PATH):
+            if shutil.which("cargo") is None:
+                self._show_rust_alert.emit()
+                return
             self._log_line.emit(
-                "[Spectrum] spectrum_viewer binary not found — build LoRaSDR first"
+                "[Spectrum] spectrum_viewer binary not found — building..."
             )
+            threading.Thread(
+                target=self._build_spectrum,
+                args=(port, title),
+                daemon=True,
+                name="spectrum_build",
+            ).start()
+            return
+        self._launch_spectrum(port, title)
+
+    def _launch_spectrum(self, port: int, title: str):
+        if not os.path.isfile(SPECTRUM_BIN_PATH):
+            self._log_line.emit("[Spectrum] viewer binary still missing after build")
             return
         try:
             proc = subprocess.Popen(
-                [SPECTRUM_BIN_PATH,
-                 "--port", str(port),
-                 "--title", node_model.short_mac()],
+                [SPECTRUM_BIN_PATH, "--port", str(port), "--title", title],
             )
             self._spectrum_viewers.append(proc)
-            self._log_line.emit(
-                f"[Spectrum] Opened spectrum for {node_model.short_mac()} on ws:{port}"
-            )
+            self._log_line.emit(f"[Spectrum] Opened spectrum for {title} on ws:{port}")
         except Exception as e:
             self._log_line.emit(f"[Spectrum] Failed to launch viewer: {e}")
+
+    def _build_spectrum(self, port: int, title: str):
+        """Background thread: cargo build spectrum_viewer, then launch it."""
+        self._build_log_line.emit(
+            "[Build] Building spectrum_viewer (this may take a minute)..."
+        )
+        proc = subprocess.Popen(
+            ["cargo", "build", "--bin", "spectrum_viewer"],
+            cwd=_LORASDR_PATH,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        for raw in proc.stdout:
+            self._build_log_line.emit(raw.decode("utf-8", errors="replace").rstrip())
+        proc.wait()
+        ok = proc.returncode == 0
+        if ok:
+            self._build_log_line.emit("[Build] spectrum_viewer build successful")
+        else:
+            self._build_log_line.emit(
+                f"[Build] spectrum_viewer build failed (exit={proc.returncode})"
+            )
+        self._spectrum_build_done.emit(ok, port, title)
+
+    def _on_spectrum_build_done(self, success: bool, port: int, title: str):
+        if not success:
+            self._log_line.emit("[Spectrum] viewer build failed — see Build console")
+            return
+        if not self.running:
+            self._log_line.emit("[Spectrum] Emulation stopped before viewer was ready")
+            return
+        self._launch_spectrum(port, title)
 
     def _alert_install_rust(self):
         msg = QMessageBox()
