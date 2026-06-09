@@ -353,6 +353,7 @@ class NodeItem(QGraphicsEllipseItem):
         act_term = menu.addAction("Open terminal")
         act_setup_term = menu.addAction("Open setup terminal")
         act_view_rx = menu.addAction("View received packets")
+        act_spectrum = menu.addAction("Show spectrum")
 
         # API connect/disconnect + ping + send message — meshtastic only
         act_api_connect = act_api_disconnect = None
@@ -388,6 +389,9 @@ class NodeItem(QGraphicsEllipseItem):
         act_term.setEnabled(is_running)
         act_view_rx.setEnabled(True)
 
+        emu = getattr(self.controller, "emulation_controller", None)
+        act_spectrum.setEnabled(bool(emu is not None and emu.running))
+
         if act_api_connect is not None:
             act_api_connect.setEnabled(is_running and not api_connected)
             act_api_disconnect.setEnabled(is_running and api_connected)
@@ -422,6 +426,9 @@ class NodeItem(QGraphicsEllipseItem):
 
         elif action == act_view_rx:
             self.controller.show_received(self)
+
+        elif action == act_spectrum:
+            self.controller.show_spectrum(self)
 
         elif act_api_connect is not None and action == act_api_connect:
             self.controller.connect_api_client(self)

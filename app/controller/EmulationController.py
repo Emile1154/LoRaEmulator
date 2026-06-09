@@ -12,8 +12,10 @@ from model.Project import ProjectModel
 
 
 BINARY_REL = os.path.join("LoRaSDR", "target", "debug", "channel_process")
+SPECTRUM_BIN_REL = os.path.join("LoRaSDR", "target", "debug", "spectrum_viewer")
 _WORKSPACE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BINARY_PATH = os.path.join(_WORKSPACE, BINARY_REL)
+SPECTRUM_BIN_PATH = os.path.join(_WORKSPACE, SPECTRUM_BIN_REL)
 _LORASDR_PATH = os.path.join(_WORKSPACE, "LoRaSDR")
 
 
@@ -33,6 +35,10 @@ class EmulationController(QObject):
         self._tmp_path: str | None = None
         self._console = console
         self._build_console = build_console
+        # local_port -> WebSocket spectrum port, parsed from channel_process stdout
+        self._spectrum_ports: dict[int, int] = {}
+        # keep references to spawned viewer windows so they aren't reaped early
+        self._spectrum_viewers: list[subprocess.Popen] = []
         self._log_line.connect(self._append_log)
         self._build_log_line.connect(self._append_build_log)
         self._build_done.connect(self._on_build_done)
@@ -58,9 +64,57 @@ class EmulationController(QObject):
         try:
             for raw in self._process.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip()
+                self._maybe_capture_spectrum_port(line)
                 self._log_line.emit(line)
         except Exception:
             pass
+
+    def _maybe_capture_spectrum_port(self, line: str):
+        """Parse 'SPECTRUM node=I local_port=L port=P' lines emitted by
+        channel_process and remember which WebSocket port feeds each node."""
+        if not line.startswith("SPECTRUM "):
+            return
+        fields = {}
+        for tok in line.split()[1:]:
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                fields[k] = v
+        try:
+            local_port = int(fields["local_port"])
+            port = int(fields["port"])
+        except (KeyError, ValueError):
+            return
+        self._spectrum_ports[local_port] = port
+
+    def show_spectrum(self, node_model):
+        """Open a live spectrum window for the given node (right-click action)."""
+        if not self.running:
+            self._log_line.emit("[Spectrum] Emulation is not running")
+            return
+        port = self._spectrum_ports.get(node_model.local_port)
+        if port is None:
+            self._log_line.emit(
+                f"[Spectrum] No spectrum feed for node {node_model.short_mac()} "
+                f"(local_port={node_model.local_port})"
+            )
+            return
+        if not os.path.isfile(SPECTRUM_BIN_PATH):
+            self._log_line.emit(
+                "[Spectrum] spectrum_viewer binary not found — build LoRaSDR first"
+            )
+            return
+        try:
+            proc = subprocess.Popen(
+                [SPECTRUM_BIN_PATH,
+                 "--port", str(port),
+                 "--title", node_model.short_mac()],
+            )
+            self._spectrum_viewers.append(proc)
+            self._log_line.emit(
+                f"[Spectrum] Opened spectrum for {node_model.short_mac()} on ws:{port}"
+            )
+        except Exception as e:
+            self._log_line.emit(f"[Spectrum] Failed to launch viewer: {e}")
 
     def _alert_install_rust(self):
         msg = QMessageBox()
@@ -130,6 +184,8 @@ class EmulationController(QObject):
             for node in self.project.nodes
         ]
 
+        self._spectrum_ports.clear()
+
         fd, self._tmp_path = tempfile.mkstemp(suffix=".json", prefix="channel_nodes_")
         with os.fdopen(fd, "w") as f:
             json.dump(nodes_data, f)
@@ -182,6 +238,13 @@ class EmulationController(QObject):
         if self._tmp_path and os.path.exists(self._tmp_path):
             os.unlink(self._tmp_path)
             self._tmp_path = None
+
+        # Close any open spectrum windows — their WebSocket feeds are now gone.
+        for proc in self._spectrum_viewers:
+            if proc.poll() is None:
+                proc.terminate()
+        self._spectrum_viewers.clear()
+        self._spectrum_ports.clear()
 
         self.running = False
         self._log_line.emit("[EmulationController] Emulation stopped")

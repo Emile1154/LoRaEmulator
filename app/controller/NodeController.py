@@ -24,7 +24,8 @@ class NodeController(QObject):
         self.project = project_model
         self.scene = scene
         self._node_console = node_console
-        self.packet_monitor = None  # set from main.py after construction
+        self.packet_monitor = None       # set from main.py after construction
+        self.emulation_controller = None # set from main.py after construction
         self._node_crashed.connect(self._show_crash_alert)
         self._node_enable_done.connect(self._on_enable_done)
         self._node_disable_done.connect(lambda item: item.setStatus(State.STOPPED))
@@ -239,6 +240,11 @@ class NodeController(QObject):
     def open_web(self, item: NodeItem):
         print(f"Open web interface on port {item.model.web_port}")
         webbrowser.open(f"http://localhost:{item.model.web_port}")
+
+    def show_spectrum(self, item: NodeItem):
+        if self.emulation_controller is None:
+            return
+        self.emulation_controller.show_spectrum(item.model)
 
     def open_terminal(self, item: NodeItem, setup):
         print(f"Open terminal for node {item.model.local_port}")

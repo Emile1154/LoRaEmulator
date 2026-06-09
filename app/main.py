@@ -57,6 +57,9 @@ class MainWindow(QMainWindow):
         )
         self.build_controller = BuildController(self.build_console)
 
+        # Let node right-click menu open per-node spectrum windows.
+        self.node_controller.emulation_controller = self.emulation_controller
+
         self.scene.node_controller = self.node_controller
 
         self.coord_label = QLabel("X: 0  Y: 0")
