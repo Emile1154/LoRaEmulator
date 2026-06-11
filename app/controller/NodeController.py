@@ -236,6 +236,11 @@ class NodeController(QObject):
     def update_position(self, item: NodeItem, pos):
         item.model.x = pos.x()
         item.model.y = pos.y()
+        # Push the new position to the running channel so path-loss updates live.
+        if self.emulation_controller is not None:
+            self.emulation_controller.send_position(
+                item.model.local_port, item.model.x, item.model.y
+            )
 
     def open_web(self, item: NodeItem):
         print(f"Open web interface on port {item.model.web_port}")

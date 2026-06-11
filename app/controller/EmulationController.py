@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -40,6 +41,9 @@ class EmulationController(QObject):
         self._spectrum_ports: dict[int, int] = {}
         # keep references to spawned viewer windows so they aren't reaped early
         self._spectrum_viewers: list[subprocess.Popen] = []
+        # UDP control port for live node-position updates (parsed from stdout)
+        self._control_port: int | None = None
+        self._ctrl_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._log_line.connect(self._append_log)
         self._build_log_line.connect(self._append_build_log)
         self._build_done.connect(self._on_build_done)
@@ -67,6 +71,7 @@ class EmulationController(QObject):
             for raw in self._process.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip()
                 self._maybe_capture_spectrum_port(line)
+                self._maybe_capture_control_port(line)
                 self._log_line.emit(line)
         except Exception:
             pass
@@ -87,6 +92,29 @@ class EmulationController(QObject):
         except (KeyError, ValueError):
             return
         self._spectrum_ports[local_port] = port
+
+    def _maybe_capture_control_port(self, line: str):
+        """Parse the 'CONTROL port=P' line that channel_process emits for the
+        live node-position UDP endpoint."""
+        if not line.startswith("CONTROL "):
+            return
+        for tok in line.split()[1:]:
+            if tok.startswith("port="):
+                try:
+                    self._control_port = int(tok.split("=", 1)[1])
+                except ValueError:
+                    pass
+
+    def send_position(self, local_port: int, x: float, y: float):
+        """Push a node's new position to the running channel so path-loss
+        updates live. No-op if emulation isn't running yet."""
+        if not self.running or self._control_port is None:
+            return
+        msg = json.dumps({"local_port": int(local_port), "x": float(x), "y": float(y)})
+        try:
+            self._ctrl_sock.sendto(msg.encode("utf-8"), ("127.0.0.1", self._control_port))
+        except OSError as e:
+            self._log_line.emit(f"[Control] position send failed: {e}")
 
     def show_spectrum(self, node_model):
         """Open a live spectrum window for the given node (right-click action)."""
@@ -231,6 +259,7 @@ class EmulationController(QObject):
         ]
 
         self._spectrum_ports.clear()
+        self._control_port = None
 
         fd, self._tmp_path = tempfile.mkstemp(suffix=".json", prefix="channel_nodes_")
         with os.fdopen(fd, "w") as f:
@@ -291,6 +320,7 @@ class EmulationController(QObject):
                 proc.terminate()
         self._spectrum_viewers.clear()
         self._spectrum_ports.clear()
+        self._control_port = None
 
         self.running = False
         self._log_line.emit("[EmulationController] Emulation stopped")
