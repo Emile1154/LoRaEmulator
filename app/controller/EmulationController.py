@@ -37,6 +37,9 @@ class EmulationController(QObject):
         self._tmp_path: str | None = None
         self._console = console
         self._build_console = build_console
+        # Optional path to tee channel_process stdout to (used by the headless
+        # benchmark, where there is no console to show it).
+        self.log_path: str | None = None
         # local_port -> WebSocket spectrum port, parsed from channel_process stdout
         self._spectrum_ports: dict[int, int] = {}
         # keep references to spawned viewer windows so they aren't reaped early
@@ -66,15 +69,27 @@ class EmulationController(QObject):
         sb.setValue(sb.maximum())
 
     def _read_stdout(self):
-        """Background thread: streams Rust process stdout to the console."""
+        """Background thread: streams Rust process stdout to the console and,
+        if log_path is set, to a log file."""
+        fh = None
+        if self.log_path:
+            try:
+                fh = open(self.log_path, "a", buffering=1)
+            except OSError:
+                fh = None
         try:
             for raw in self._process.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip()
                 self._maybe_capture_spectrum_port(line)
                 self._maybe_capture_control_port(line)
+                if fh:
+                    fh.write(line + "\n")
                 self._log_line.emit(line)
         except Exception:
             pass
+        finally:
+            if fh:
+                fh.close()
 
     def _maybe_capture_spectrum_port(self, line: str):
         """Parse 'SPECTRUM node=I local_port=L port=P' lines emitted by
@@ -287,6 +302,38 @@ class EmulationController(QObject):
                 f"region={n['region']} preset={n['modem_preset']}"
             )
 
+    @property
+    def pid(self) -> int | None:
+        """PID of the running channel_process (for resource sampling)."""
+        return self._process.pid if self._process is not None else None
+
+    @property
+    def control_port(self) -> int | None:
+        """UDP control port parsed from channel_process stdout (live positions)."""
+        return self._control_port
+
+    def wait_until_ready(self, timeout: float = 30.0) -> bool:
+        """Block until channel_process has reported its control port (a good
+        proxy for 'engine is up and listening'). Returns False on timeout or if
+        the process died. Intended for headless/benchmark use."""
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._process is not None and self._process.poll() is not None:
+                return False  # process exited
+            if self._control_port is not None:
+                return True
+            time.sleep(0.1)
+        return False
+
+    def restart(self, timeout: float = 30.0) -> bool:
+        """Stop and start the channel process so baked-in parameters (noise
+        variance, modem preset) are re-read from the node config. Used by the
+        benchmark after changing those parameters. Returns True once ready."""
+        self.stop()
+        self.start()
+        return self.wait_until_ready(timeout)
+
     def rebuild(self):
         """Triggered from menu: force-rebuild channel_process binary."""
         if shutil.which("cargo") is None:
@@ -303,11 +350,18 @@ class EmulationController(QObject):
             return
 
         if self._process is not None:
+            # The FutureSDR runtime ignores SIGTERM, so fall back to SIGKILL and
+            # wait for the process to actually exit — otherwise a quick restart
+            # races the dying process for the UDP ports (control/KISS/spectrum).
             self._process.terminate()
             try:
                 self._process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 self._process.kill()
+                try:
+                    self._process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
             self._process = None
 
         if self._tmp_path and os.path.exists(self._tmp_path):

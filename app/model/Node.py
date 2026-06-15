@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from enum import Enum
 import docker
+import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -95,6 +97,8 @@ class Node:
         self.packet_sent_cb = None      # set by PacketMonitor
         self._ping_ack_event: threading.Event | None = None
         self._ping_t0: float | None = None
+        self._ping_snr: float | None = None   # SNR of the received ACK
+        self._ping_rssi: float | None = None  # RSSI of the received ACK
 
     def short_mac(self):
         return self.MAC_address[-4:]
@@ -324,11 +328,22 @@ class Node:
         pub.subscribe(self.on_packet_receive, "meshtastic.receive")
         node.setTime()
 
+        # Apply this node's configured region and modem preset (not hard-coded),
+        # so the benchmark can vary the preset between runs.
+        region_code = getattr(
+            config_pb2.Config.LoRaConfig.RegionCode, self.region,
+            config_pb2.Config.LoRaConfig.RegionCode.RU,
+        )
+        preset_code = getattr(
+            config_pb2.Config.LoRaConfig.ModemPreset, self.modem_preset,
+            config_pb2.Config.LoRaConfig.ModemPreset.LONG_FAST,
+        )
         lc = node.localConfig
-        lc.lora.region = config_pb2.Config.LoRaConfig.RegionCode.RU
+        lc.lora.region = region_code
         lc.lora.use_preset = True
-        lc.lora.modem_preset = config_pb2.Config.LoRaConfig.ModemPreset.LONG_FAST
+        lc.lora.modem_preset = preset_code
         node.writeConfig("lora")
+        self.logger(f"radio config: region={self.region} preset={self.modem_preset}", "INFO")
         time.sleep(2)
         # Interface stays open — it is the permanent packet-receive monitor.
 
@@ -354,14 +369,23 @@ class Node:
     def on_packet_receive(self, packet, interface):
         my_from_id = "!" + self.MAC_address.replace(":", "")[4:].lower()
         if packet.get('fromId') == my_from_id:
+            if self._ping_ack_event is not None:
+                decoded = packet.get('decoded', {})
+                if decoded.get('portnum') == 'TEXT_MESSAGE_APP' and (
+                    decoded.get('payload') == b'ping' or decoded.get('text') == 'ping'
+                ):
+                    self._ping_t0 = time.time()
             if self.packet_sent_cb is not None:
                 self.packet_sent_cb(packet)
-            return 
+            return
         if interface is not self.interface:
             return
 
         portnum = packet.get('decoded', {}).get('portnum', '')
         if self._ping_ack_event is not None and portnum == 'ROUTING_APP':
+            # Capture link quality of the ACK as seen by this (pinging) node.
+            self._ping_snr = packet.get('rxSnr')
+            self._ping_rssi = packet.get('rxRssi')
             self._ping_ack_event.set()
             
         self.logger("new packet received", "INFO")
@@ -379,20 +403,26 @@ class Node:
         except Exception as e:
             self.logger(f"send_message error: {e}", "ERROR")
 
-    def send_ping(self, target: 'Node'):
+    def ping(self, target: 'Node', timeout: float = 30
+             ) -> tuple[bool, float | None, float | None, float | None]:
+        """Send a ping (data packet with wantAck) and measure the round-trip
+        time from the actual transmit to the ACK. Returns
+        (success, rtt_ms, snr, rssi); the last three are None on timeout.
+        SNR/RSSI are those of the ACK as received by this node."""
         if self.interface is None:
-            self.logger("cannot send ping: Python API client not connected", "ERROR")
-            return
+            return (False, None, None, None)
 
         from meshtastic import portnums_pb2
 
         target_4bytes = target.MAC_address.replace(':', '')[4:].lower()
         target_node_id = f"!{target_4bytes}"
 
-        self.logger(f"ping {self.MAC_address} -> {target.MAC_address} ...", "PING")
-
         self._ping_ack_event = threading.Event()
+        # Fallback start time; overwritten by on_packet_receive when the
+        # firmware echoes this ping back at actual transmit time.
         self._ping_t0 = time.time()
+        self._ping_snr = None
+        self._ping_rssi = None
 
         try:
             self.interface.sendData(
@@ -401,21 +431,67 @@ class Node:
                 portNum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
                 wantAck=True,
             )
-
-            if self._ping_ack_event.wait(timeout=30):
+            if self._ping_ack_event.wait(timeout=timeout):
                 rtt = (time.time() - self._ping_t0) * 1000
-                self.logger(
-                    f"ping {self.MAC_address} <- {target.MAC_address} RTT={rtt:.0f} ms", "PING"
-                )
-            else:
-                self.logger(
-                    f"ping timeout: {self.MAC_address} -> {target.MAC_address} (no ACK in 30 s)", "PING"
-                )
+                return (True, rtt, self._ping_snr, self._ping_rssi)
+            return (False, None, None, None)
         except Exception as e:
             self.logger(f"ping {self.MAC_address} -> {target.MAC_address} error: {e}", "ERROR")
+            return (False, None, None, None)
         finally:
             self._ping_ack_event = None
             self._ping_t0 = None
+
+    def send_ping(self, target: 'Node'):
+        """GUI wrapper around ping(): performs the measurement and logs it."""
+        if self.interface is None:
+            self.logger("cannot send ping: Python API client not connected", "ERROR")
+            return
+        self.logger(f"ping {self.MAC_address} -> {target.MAC_address} ...", "PING")
+        ok, rtt, snr, rssi = self.ping(target)
+        if ok:
+            self.logger(
+                f"ping {self.MAC_address} <- {target.MAC_address} "
+                f"RTT={rtt:.0f} ms SNR={snr} RSSI={rssi}", "PING"
+            )
+        else:
+            self.logger(
+                f"ping timeout: {self.MAC_address} -> {target.MAC_address} (no ACK in 30 s)", "PING"
+            )
+
+    def move(self, x: float, y: float, ctrl_sock: socket.socket | None = None,
+             control_port: int = 17000, host: str = "127.0.0.1"):
+        """Update the node position and push it to the running channel emulator
+        so distance-based attenuation is recomputed live. Mirrors the GUI drag
+        path (EmulationController.send_position). Coordinates are in GUI pixels;
+        the channel scales them by POS_SCALE internally. Pass a reusable
+        `ctrl_sock` when moving repeatedly to avoid per-call socket churn."""
+        self.x = x
+        self.y = y
+        payload = json.dumps(
+            {"local_port": int(self.local_port), "x": float(x), "y": float(y)}
+        ).encode("utf-8")
+        sock = ctrl_sock or socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.sendto(payload, (host, control_port))
+        except OSError as e:
+            self.logger(f"move: position send failed: {e}", "WARN")
+        finally:
+            if ctrl_sock is None:
+                sock.close()
+
+    def set_noise_std(self, noise_std: float):
+        """Set the receiver noise variance (AWGN). Unlike position, this value
+        is baked into the channel's AWGN block when the node is created — there
+        is no live-update path — so it takes effect only after the channel
+        process is restarted (see EmulationController.restart)."""
+        self.noise_std = float(noise_std)
+
+    def set_modem_preset(self, preset: str):
+        """Set the modem preset (SF/BW/CR profile). Applied to the firmware on
+        the next init_meshtastic_client(), and to the channel on its next
+        restart. Change it, then restart the channel and re-init the node."""
+        self.modem_preset = preset
 
     def connect_api_client(self):
         if self.network_type != "meshtastic":
