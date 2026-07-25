@@ -1,0 +1,51 @@
+@startuml deployment
+title Диаграмма развёртывания эмулятора LoRa mesh-сети
+
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+node "Хост (Linux)" {
+
+  node "Графический интерфейс\n(Python / PyQt6)" as GUI {
+    component "EmulationController" as EC
+    component "NodeController" as NC
+    component "PacketMonitor" as PM
+  }
+
+  node "channel_process\n(Rust / FutureSDR)\nмодель радиоканала" as CH {
+    component "ChannelProcessor\n(суммирование + затухание + шум)" as CP
+    component "position_control_task\n(UDP 17000)" as PCT
+    component "KISS UDP\n(на каждый узел)" as KISS
+    component "WebSocket спектра\n(18000+i)" as WSOCK
+  }
+
+  node "spectrum_viewer\n(Rust / eframe)" as SV
+
+  node "Docker Engine" as DOCKER {
+    node "Контейнер узла 1\nmeshtasticd (native_virtual)" as N1
+    node "Контейнер узла N\nmeshtasticd" as N2
+  }
+}
+
+node "Браузер" as BR
+
+' ---- управление и запуск ----
+GUI --> CH : запуск процесса,\nчтение stdout
+EC ..> PCT : UDP 17000\nобновление позиций
+GUI --> DOCKER : Docker SDK\n(сборка / запуск\nконтейнеров)
+
+' ---- API прошивки ----
+NC --> N1 : TCP 4403\nMeshtastic API\n(ping, сообщения, конфиг)
+PM ..> N1 : подписка на пакеты
+
+' ---- радиообмен KISS поверх UDP ----
+N1 <--> KISS : KISS / UDP\n(local_port / remote_port)
+N2 <--> KISS : KISS / UDP
+
+' ---- спектр ----
+SV --> WSOCK : WebSocket\nIQ-отсчёты
+
+' ---- веб-интерфейс узла ----
+BR --> N1 : HTTP 9000\n(web UI узла)
+
+@enduml

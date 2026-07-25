@@ -1,0 +1,63 @@
+@startuml node_lifecycle
+title Жизненный цикл узла (U-образная блок-схема)
+
+skinparam shadowing false
+hide empty description
+
+' ===== левый столбец (вниз) =====
+state "CREATED" as A1
+state "STARTING (enable)" as A2
+state "Docker-образ есть?" as Dimg <<choice>>
+state "Сборка образа\n(docker build)" as BIMG
+state "Контейнер уже\nзапущен?" as Drun <<choice>>
+state "RUNNING\n(уже запущен)" as RUNALR
+state "Прошивка собрана?" as Dfw <<choice>>
+state "Сборка прошивки\n(pio run)" as BFW
+state "Запуск контейнера\nmeshtasticd" as RUNC
+state "RUNNING" as A5
+
+' ===== правый столбец (вверх) =====
+state "Монитор сбоев,\nокно логов,\nпауза ~15 c" as B1
+state "TCP-клиент +\nконфигурация радио" as B2
+state "Узел работает" as B3
+state "Событие?" as Devt <<choice>>
+state "shutdown()\nSTOPPING" as B4
+state "Остановка и удаление\nконтейнера" as B5
+state "STOPPED" as B6
+
+state "ERROR" as ERRL
+state "ERROR" as ERRR
+
+[*] -down-> A1
+A1 -down-> A2
+A2 -down-> Dimg
+Dimg -down-> Drun : да
+Dimg -left-> BIMG : нет
+BIMG -down-> Drun
+BIMG -left-> ERRL : ошибка
+Drun -left-> RUNALR : да
+Drun -down-> Dfw : нет
+Dfw -down-> RUNC : да
+Dfw -left-> BFW : нет
+BFW -down-> RUNC
+BFW -left-> ERRL : ошибка
+RUNC -down-> A5
+
+A5 -right-> B1
+
+B1 -up-> B2
+B2 -up-> B3
+B3 -up-> Devt
+Devt -up-> B4 : остановка
+Devt -right-> ERRR : контейнер упал
+B4 -up-> B5
+B5 -up-> B6
+B6 -up-> [*]
+RUNALR --> [*]
+
+note right of Dimg : Docker-образ есть?
+note right of Drun : контейнер уже запущен?
+note right of Dfw : прошивка собрана?
+note left of Devt : событие при работе?
+
+@enduml

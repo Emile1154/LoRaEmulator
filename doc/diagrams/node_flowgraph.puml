@@ -1,0 +1,197 @@
+@startuml node_flowgraph
+title Граф узла FutureSDR: общий вход и 8 цепочек приёма/передачи (по пресетам Meshtastic)
+
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam nodesep 150
+skinparam ranksep 12
+top to bottom direction
+
+rectangle "ChannelSubscriber\n(IQ от канала)" as SUB
+rectangle "AddAWGN\n(+шум)" as AWGN
+rectangle "WebsocketSink\n(спектр)" as WS
+rectangle "Прошивка Meshtastic\n(KISS / UDP)" as FW
+SUB --> AWGN
+AWGN --> WS
+
+package "Цепочки приёма — по одной на каждый пресет (8)" {
+  rectangle "FrameSync" as FS1
+  rectangle "FftDemod" as FT1
+  rectangle "GrayMapping" as GM1
+  rectangle "Deinterleaver" as DI1
+  rectangle "HammingDecoder" as HM1
+  rectangle "HeaderDecoder" as HD1
+  rectangle "Decoder" as DC1
+  rectangle "BlobToUdp" as BU1
+  FS1 --> FT1
+  FT1 --> GM1
+  GM1 --> DI1
+  DI1 --> HM1
+  HM1 --> HD1
+  HD1 ..> DC1
+  DC1 ..> BU1
+  HD1 ..> FS1 : frame_info
+  DC1 ..> FS1 : crc_check
+  FS1 ..> BU1 : kiss
+  HD1 ..> BU1 : kiss
+  rectangle "FrameSync" as FS2
+  rectangle "FftDemod" as FT2
+  rectangle "GrayMapping" as GM2
+  rectangle "Deinterleaver" as DI2
+  rectangle "HammingDecoder" as HM2
+  rectangle "HeaderDecoder" as HD2
+  rectangle "Decoder" as DC2
+  rectangle "BlobToUdp" as BU2
+  FS2 --> FT2
+  FT2 --> GM2
+  GM2 --> DI2
+  DI2 --> HM2
+  HM2 --> HD2
+  HD2 ..> DC2
+  DC2 ..> BU2
+  rectangle "FrameSync" as FS3
+  rectangle "FftDemod" as FT3
+  rectangle "GrayMapping" as GM3
+  rectangle "Deinterleaver" as DI3
+  rectangle "HammingDecoder" as HM3
+  rectangle "HeaderDecoder" as HD3
+  rectangle "Decoder" as DC3
+  rectangle "BlobToUdp" as BU3
+  FS3 --> FT3
+  FT3 --> GM3
+  GM3 --> DI3
+  DI3 --> HM3
+  HM3 --> HD3
+  HD3 ..> DC3
+  DC3 ..> BU3
+  rectangle "FrameSync" as FS4
+  rectangle "FftDemod" as FT4
+  rectangle "GrayMapping" as GM4
+  rectangle "Deinterleaver" as DI4
+  rectangle "HammingDecoder" as HM4
+  rectangle "HeaderDecoder" as HD4
+  rectangle "Decoder" as DC4
+  rectangle "BlobToUdp" as BU4
+  FS4 --> FT4
+  FT4 --> GM4
+  GM4 --> DI4
+  DI4 --> HM4
+  HM4 --> HD4
+  HD4 ..> DC4
+  DC4 ..> BU4
+  rectangle "FrameSync" as FS5
+  rectangle "FftDemod" as FT5
+  rectangle "GrayMapping" as GM5
+  rectangle "Deinterleaver" as DI5
+  rectangle "HammingDecoder" as HM5
+  rectangle "HeaderDecoder" as HD5
+  rectangle "Decoder" as DC5
+  rectangle "BlobToUdp" as BU5
+  FS5 --> FT5
+  FT5 --> GM5
+  GM5 --> DI5
+  DI5 --> HM5
+  HM5 --> HD5
+  HD5 ..> DC5
+  DC5 ..> BU5
+  rectangle "FrameSync" as FS6
+  rectangle "FftDemod" as FT6
+  rectangle "GrayMapping" as GM6
+  rectangle "Deinterleaver" as DI6
+  rectangle "HammingDecoder" as HM6
+  rectangle "HeaderDecoder" as HD6
+  rectangle "Decoder" as DC6
+  rectangle "BlobToUdp" as BU6
+  FS6 --> FT6
+  FT6 --> GM6
+  GM6 --> DI6
+  DI6 --> HM6
+  HM6 --> HD6
+  HD6 ..> DC6
+  DC6 ..> BU6
+  rectangle "FrameSync" as FS7
+  rectangle "FftDemod" as FT7
+  rectangle "GrayMapping" as GM7
+  rectangle "Deinterleaver" as DI7
+  rectangle "HammingDecoder" as HM7
+  rectangle "HeaderDecoder" as HD7
+  rectangle "Decoder" as DC7
+  rectangle "BlobToUdp" as BU7
+  FS7 --> FT7
+  FT7 --> GM7
+  GM7 --> DI7
+  DI7 --> HM7
+  HM7 --> HD7
+  HD7 ..> DC7
+  DC7 ..> BU7
+  rectangle "FrameSync" as FS8
+  rectangle "FftDemod" as FT8
+  rectangle "GrayMapping" as GM8
+  rectangle "Deinterleaver" as DI8
+  rectangle "HammingDecoder" as HM8
+  rectangle "HeaderDecoder" as HD8
+  rectangle "Decoder" as DC8
+  rectangle "BlobToUdp" as BU8
+  FS8 --> FT8
+  FT8 --> GM8
+  GM8 --> DI8
+  DI8 --> HM8
+  HM8 --> HD8
+  HD8 ..> DC8
+  DC8 ..> BU8
+}
+
+AWGN --> FS1
+AWGN --> FS2
+AWGN --> FS3
+AWGN --> FS4
+AWGN --> FS5
+AWGN --> FS6
+AWGN --> FS7
+AWGN --> FS8
+BU1 ..> FW
+BU2 ..> FW
+BU3 ..> FW
+BU4 ..> FW
+BU5 ..> FW
+BU6 ..> FW
+BU7 ..> FW
+BU8 ..> FW
+
+package "Цепочки передачи — по одной на каждый пресет (8)" {
+  rectangle "Transmitter" as TX1
+  rectangle "ChannelPublisher" as PB1
+  TX1 --> PB1
+  rectangle "Transmitter" as TX2
+  rectangle "ChannelPublisher" as PB2
+  TX2 --> PB2
+  rectangle "Transmitter" as TX3
+  rectangle "ChannelPublisher" as PB3
+  TX3 --> PB3
+  rectangle "Transmitter" as TX4
+  rectangle "ChannelPublisher" as PB4
+  TX4 --> PB4
+  rectangle "Transmitter" as TX5
+  rectangle "ChannelPublisher" as PB5
+  TX5 --> PB5
+  rectangle "Transmitter" as TX6
+  rectangle "ChannelPublisher" as PB6
+  TX6 --> PB6
+  rectangle "Transmitter" as TX7
+  rectangle "ChannelPublisher" as PB7
+  TX7 --> PB7
+  rectangle "Transmitter" as TX8
+  rectangle "ChannelPublisher" as PB8
+  TX8 --> PB8
+}
+
+FW ..> TX1 : msg
+FW ..> TX2 : msg
+FW ..> TX3 : msg
+FW ..> TX4 : msg
+FW ..> TX5 : msg
+FW ..> TX6 : msg
+FW ..> TX7 : msg
+FW ..> TX8 : msg
+
+@enduml

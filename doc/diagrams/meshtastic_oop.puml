@@ -1,0 +1,134 @@
+@startuml meshtastic_oop
+title Архитектура прошивки Meshtastic: радиоуровень и маршрутизация (ARCH_PORTDUINO)
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+hide empty members
+left to right direction
+
+' ===================== Высокоуровневые mesh-операции =====================
+package "Высокоуровневые mesh-операции" {
+  class MeshService {
+    +sendToMesh(MeshPacket*)
+    +handleFromRadio(MeshPacket*)
+    +getForPhone()
+  }
+  class Router {
+    +send(MeshPacket*)
+    +handleReceived(MeshPacket*)
+  }
+  class FloodingRouter
+  class NextHopRouter
+  class ReliableRouter
+
+  abstract class MeshModule {
+    +{static} callModules(MeshPacket&)
+    #handleReceived(MeshPacket&)
+  }
+  class RoutingModule
+  class TextMessageModule
+}
+
+FloodingRouter --|> Router
+NextHopRouter --|> FloodingRouter
+ReliableRouter --|> NextHopRouter
+RoutingModule --|> MeshModule
+TextMessageModule --|> MeshModule
+
+MeshService o--> Router : router
+MeshService ..> PhoneAPI : toPhoneQueue
+Router ..> MeshModule : callModules()
+MeshModule ..> MeshService : sendToMesh()
+
+class PhoneAPI
+
+' ===================== Абстрактный радиоинтерфейс =====================
+package "Уровень абстракции радиоинтерфейса" {
+  abstract class RadioInterface {
+    .. виртуальный базовый класс ..
+    +{abstract} send(MeshPacket*)
+    +{abstract} startReceive()
+    +{abstract} reconfigure()
+    #calculateAirtime()
+  }
+
+  class RadioLibInterface {
+    .. конкретная реализация ..
+    .. использует аппаратные SPI-драйверы ..
+    +startTransmit()
+    +completeSending()
+  }
+
+  class RadioSoftLibInterface {
+    .. реализация без GPIO и module ..
+    .. использует программный интерфейс ..
+  }
+
+  class SimRadio {
+    .. имитация SPI (Portduino) ..
+    +delivers received socket pkt
+  }
+}
+
+RadioLibInterface --|> RadioInterface
+RadioSoftLibInterface --|> RadioInterface
+SimRadio --|> RadioInterface
+
+' ===================== Аппаратный радиоинтерфейс (SPI) =====================
+package "Аппаратный радиоинтерфейс (SPI)" {
+  class "SX126xInterface<T>" as SX126x {
+    .. low-level драйвер SX126x ..
+  }
+  class SX1262Interface
+  class SX1268Interface
+  note bottom of SX126x : обёртки аппаратных\nдрайверов RadioLib поверх SPI
+}
+
+SX126x --|> RadioLibInterface
+SX1262Interface --|> SX126x
+SX1268Interface --|> SX126x
+RadioLibInterface ..> SX126x : binds to (SPI)
+
+' ===================== Программный радиоинтерфейс (KISS/UDP) =====================
+package "Программный радиоинтерфейс (KISS)" {
+  class "SoftwareInterface<T>" as SoftwareInterface {
+    +SoftwareInterface(Transport*)
+    +init()
+    +startReceive()
+  }
+  class KissInterface
+  abstract class SoftwareDriver
+  class KissDriver {
+    .. кадрирование KISS ..
+  }
+  abstract class Transport {
+    +{abstract} send(buf,len)
+    +{abstract} receive(buf,len)
+  }
+  class UDPTransport {
+    .. UDP-сокет ..
+    +send() / receive()
+  }
+}
+
+SoftwareInterface --|> RadioSoftLibInterface
+KissInterface --|> SoftwareInterface : <KissDriver>
+KissDriver --|> SoftwareDriver
+UDPTransport --|> Transport
+SoftwareInterface o--> Transport : transport
+SoftwareInterface ..> SoftwareDriver : T (драйвер)
+RadioSoftLibInterface ..> SoftwareInterface : binds to
+
+' ===================== Данные =====================
+class MeshPacket <<protobuf>>
+RadioInterface ..> MeshPacket : tx / rx
+Router ..> MeshPacket
+
+note top of RadioSoftLibInterface
+  В данной работе радиообмен идёт через
+  KissInterface -> KissDriver -> UDPTransport:
+  кадры KISS поверх UDP к модели радиоканала
+  (FutureSDR) вместо реального трансивера.
+end note
+
+@enduml

@@ -1,0 +1,41 @@
+@startuml position_update
+title Обновление позиции узла на лету и пересчёт канала
+
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+
+actor "Пользователь" as U
+participant "NodeItem\n(карта, GUI)" as ITEM
+participant "NodeController\n(update_position)" as NC
+participant "EmulationController\n(send_position)" as EC
+participant "position_control_task\n(channel_process)" as PCT
+database "positions\nArc<Mutex<Vec<Pos2d>>>" as POS
+participant "ChannelProcessor\n(run loop)" as CP
+
+== Перетаскивание узла ==
+U -> ITEM : тянет узел мышью
+ITEM -> NC : update_position(item, pos)
+NC -> NC : model.x = pos.x\nmodel.y = pos.y
+NC -> EC : send_position(local_port, x, y)
+EC -> PCT : UDP 127.0.0.1:17000\n{ local_port, x, y }
+
+== Применение в канале ==
+PCT -> PCT : разбор PosUpdate,\nlocal_port -> индекс узла
+PCT -> POS : positions[idx] =\n{ x/POS_SCALE, y/POS_SCALE }\n(под mutex)
+
+== Каждый кадр (реальное время) ==
+loop по группам кадров
+  CP -> POS : снимок позиций (lock + clone)
+  POS --> CP : pos[]
+  CP -> CP : d = distance(pos[rx], pos[tx])\nattenuation = (d + 1)^-3\nsum += sample * attenuation
+  CP -> CP : + AWGN, выдача приёмнику
+end
+
+note over POS, CP
+  Поток канала не перезапускается: новые
+  координаты подхватываются на следующем
+  снимке, поэтому дальность и связность
+  меняются сразу при перетаскивании.
+end note
+
+@enduml

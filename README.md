@@ -1,58 +1,109 @@
 # LoRa Emulator
 
-A emulation platform for LoRa mesh networks using Meshtastic firmware. This project provides environment for emulate multiple LoRa nodes with SDR, managing their configuration, and testing mesh network behavior.
+A **Software-in-the-Loop (SITL)** emulator for LoRa mesh networks. It runs the **real Meshtastic firmware** on top of a **software-modeled LoRa physical layer** (built with FutureSDR), so you can place, configure and test multiple virtual LoRa nodes and observe real mesh behaviour — without any radio hardware.
 
-## Overview
+Instead of an SX126x/SX127x transceiver over SPI, the firmware talks to a virtual radio driver via the **KISS protocol over UDP**, and a separate channel process mixes the per-node signals with distance-based attenuation and additive white Gaussian noise (AWGN).
 
-LoRa Emulator is a comprehensive tool for:
-- **Visual Node Management**: Place, configure, and manage virtual LoRa nodes on a 2D canvas
-- **Docker-based Emulation**: Each node runs in its own isolated Docker container with real Meshtastic firmware
-- **Physical Level Emulation**: Emulate LoRa channel by FutureSDR 
-- **Network Simulation**: Test LoRa mesh networking without real devices
-- **Project Management**: Save and load network configurations
+## Demonstrations
+
+**Broadcast propagation across the mesh**
+
+<video src="doc/giff/broadcast.mp4" controls muted width="100%"></video>
+
+**Launch, direct ping and multi-hop ping (relaying)**
+
+<video src="doc/giff/launch_ping_multihop_ping.mp4" controls muted width="100%"></video>
+
+**Live spectrum & waterfall**
+
+<video src="doc/giff/waterfall.mp4" controls muted width="100%"></video>
+
+## What it does
+
+- **Visual node management** — place, configure and arrange virtual LoRa nodes on a 2D canvas.
+- **Real firmware in containers** — each node runs the `meshtasticd` daemon in its own Docker container.
+- **Physical-layer emulation** — the LoRa channel (modulation/demodulation, path loss, AWGN) is modeled in software with FutureSDR.
+- **Packet visualization** — live arrows and overlays for transmissions, receptions, ACKs and relay (RETX) hops.
+- **Live channel control** — drag a node and the path loss is recomputed on the fly (no restart).
+- **Spectrum & waterfall** — a per-node live spectrum/waterfall viewer fed by the post-channel IQ stream.
+- **Benchmark harness** — scripted measurement of PDR/RTT/SNR vs distance, relaying, and engine CPU/RAM scalability.
+- **Project management** — save/load network configurations as JSON.
 
 ## Architecture
 
-The project consists of several integrated components:
+The system is split into cooperating processes on one host:
+
+- **GUI** (Python / PyQt6) — node configuration, topology canvas, packet monitor, controllers.
+- **channel_process** (Rust / FutureSDR) — the radio-channel model: per-node receive/transmit flowgraphs, signal mixing with attenuation + AWGN, a UDP control port for live positions, and a per-node spectrum WebSocket.
+- **Docker containers** — one per node, each running the Meshtastic `meshtasticd` firmware (native_virtual build), connected to the channel model over KISS/UDP.
+- **spectrum_viewer** (Rust / eframe) — optional per-node live spectrum/waterfall window.
 
 ![LoRa Emulator Architecture](image/README/image.png)
 
+Data flow: user settings and messages go through the Meshtastic Python API to a TCP server inside `meshtasticd`, then down to the virtual radio over KISS/UDP. The virtual nodes exchange IQ samples through the channel emulator, and received frames flow back up to the application layer.
+
+### Channel model
+
+The received signal at node *m* is the sum of all transmitted signals, each attenuated with distance, plus Gaussian noise:
+
+```
+C_nm = (d_nm + 1)^-3 / sqrt(2)
+y_m(i) = Σ x_n(i) · C_nm + η_m(i)
+```
+
+where `d_nm` is the 2D distance between nodes *n* and *m*. The `(d+1)^-3` exponent sits between free space (`-2`) and urban propagation (`-4`). At `d = 0` the self-signal is not summed.
+
 ## Features
 
-### Node Management
-- **Visual Placement**: Drag and drop nodes on an infinite 2D canvas
-- **Node States**: Visual indication of node status (Created, Starting, Running, Stopped, Error)
-- **Configuration**: Per-node settings for:
-  - MAC address (auto-generated)
-  - Network ports (local, remote, web)
-  - LoRa parameters (frequency, bandwidth, spreading factor, code rate)
-  - Region settings and modem presets
+### Node management
+- **Visual placement** — drag and drop nodes on an infinite 2D canvas.
+- **Node states** — colour-coded status (Created, Starting, Running, Stopped, Error).
+- **Per-node configuration** — MAC address (auto-generated), network ports, region and modem preset, receiver noise level.
 
-### Emulation Control
-- **Launch All**: Start all configured nodes simultaneously
-- **Shutdown All**: Gracefully stop all running nodes
-- **Individual Control**: Start/stop nodes independently via context menu
-- **Auto-cleanup**: Containers are automatically removed on shutdown
+### Emulation control
+- **Individual control** — start/stop nodes from the context menu.
+- **Live position updates** — dragging a running node updates path loss immediately.
+- **Auto-cleanup** — containers are removed on shutdown.
 
-### Project Management
-- **Save/Load**: Persist network configurations to JSON files
-- **New Project**: Clear canvas and start fresh
+### Observability
+- **Packet monitor** — visual arrows/overlays for TX, RX, ACK and relay hops; reconstruction of relay paths; broadcast visualization.
+- **Spectrum & waterfall viewer** — live STFT of the post-channel signal per node (frequency/gain/zoom/window controls, pause, scrollback).
+
+### Project management
+- **Save / Load** — network configurations as JSON.
+- **New project** — clear canvas and start fresh.
 
 ## Prerequisites
 
-- **Docker**: For running node containers
-- **Python 3.10+**: For the GUI application
-- **Rust** (optional): For building LoRaSDR components
-- **PlatformIO** (optional): For building meshtastic firmware
+The emulator targets **Linux**.
+
+- **Python 3.10+** — for the GUI (`pip install -r requirements.txt`; key deps: PyQt6, docker, meshtastic).
+- **Rust (nightly)** — FutureSDR requires the nightly toolchain with `rustfmt` and `clippy`:
+  ```bash
+  rustup toolchain install nightly --component rustfmt clippy
+  rustup default nightly
+  rustup target add wasm32-unknown-unknown --toolchain nightly
+  cargo install --locked trunk
+  ```
+- **Docker** — runs each node's firmware container (the image is built automatically on first launch).
+
+> Rust components (`channel_process`, `spectrum_viewer`) are built automatically on first use from the GUI, so manual compilation is usually not required.
+
+### System requirements
+
+| Resource | Minimum (≤ 3 nodes) | Recommended |
+|----------|---------------------|-------------|
+| CPU      | 4 logical cores     | 16+ logical cores |
+| RAM      | 8 GB                | 16 GB       |
+| GPU      | OpenGL support      | OpenGL support |
 
 ## Installation
 
-1. **Clone the repository with submodules**:
+1. **Clone with submodules**:
    ```bash
    git clone --recursive https://github.com/Emile1154/LoRaEmulator.git
    cd LoRaEmulator
    ```
-
 2. **Install Python dependencies**:
    ```bash
    pip install -r requirements.txt
@@ -60,108 +111,62 @@ The project consists of several integrated components:
 
 ## Usage
 
-### Running the GUI Application
+### Run the GUI
 
 ```bash
-cd app
-python main.py
+python app/main.py
 ```
 
-### Creating a Network
+### Build a network
 
-1. **Add Nodes**: Right-click on the canvas to create new nodes
-2. **Configure**: Double-click a node or use "Edit" from context menu
-3. **Position**: Drag nodes to arrange your network topology
-4. **Launch**: Use "Run → Launch All Devices" or start nodes individually
+1. **Add nodes** — right-click the canvas to create nodes.
+2. **Configure** — double-click a node or use *Edit* from the context menu.
+3. **Position** — drag nodes to arrange the topology (drag while running to change link conditions live).
+4. **Launch** — *Run → Launch All Devices*, or start nodes individually.
 
-### Context Menu Options
+### Context menu (per node)
 
-Right-click on any node to access:
-- **Edit**: Modify node configuration
-- **Delete**: Remove node from project
-- **Enable Device**: Start the node container
-- **Disable Device**: Stop the node container
-- **Open Web Interface**: Access node's web UI (when running)
-- **Open Terminal**: Access node's CLI (when running)
+- **Edit** / **Delete** — modify or remove a node.
+- **Enable / Disable Device** — start/stop the node container.
+- **Open Web Interface** — node web UI (when running).
+- **Open Terminal** — node logs / shell (when running).
+- **Show Spectrum** — open the live spectrum/waterfall window for the node.
 
-### Node States
+### Node states
 
-| State    | Color  | Description                          |
-|----------|--------|--------------------------------------|
-| CREATED  | Gray   | Node defined but not started         |
-| STARTING | Yellow | Container is launching               |
-| RUNNING  | Green  | Node is active and operational       |
-| STOPPING | Yellow | Container is shutting down           |
-| STOPPED  | Blue   | Node was stopped by user             |
-| ERROR    | Red    | Failed to start or crashed           |
-
-## Configuration
-
-### Node Parameters
-
-Each node can be configured with:
-
-- **Network Ports**:
-  - Local port: For node communication
-  - Remote port: For mesh networking
-  - Web port: For HTTP interface access
-
-- **LoRa Settings**:
-  - Frequency: Operating frequency in Hz
-  - Bandwidth: Signal bandwidth
-  - Spreading Factor: SF7-SF12
-  - Code Rate: Error correction (4/5, 4/6, 4/7, 4/8)
-  - LDRO: Low data rate optimization
-
-- **Mesh Settings**:
-  - Region: Regulatory region (EU, US, etc.)
-  - Modem Preset: Predefined configuration sets
-
+| State    | Color  | Description                    |
+|----------|--------|--------------------------------|
+| CREATED  | Gray   | Defined but not started        |
+| STARTING | Yellow | Container is launching         |
+| RUNNING  | Green  | Active and operational         |
+| STOPPING | Yellow | Container is shutting down     |
+| STOPPED  | Blue   | Stopped by the user            |
+| ERROR    | Red    | Failed to start or crashed     |
 
 ## Submodules
 
-This project includes several git submodules:
-
 ### [meshtastic_firmware](https://github.com/Emile1154/firmware)
-Official Meshtastic firmware adapted for native virtual environment. Provides the `meshtasticd` daemon that runs inside each node container.
+Meshtastic firmware adapted for a native virtual environment. Provides the `meshtasticd` daemon that runs inside each node container and talks to the channel model through a virtual KISS-over-UDP radio driver.
 
 ### [LoRaSDR](https://github.com/Emile1154/LoRaSDR.git)
-Rust-based Software Defined LoRa transceiver. Implements:
-- LoRa modulation/demodulation
-- Frame synchronization
-- Channel modeling with AWGN
-- Packet forwarding
+Rust Software-Defined LoRa transceiver and channel model. Implements LoRa modulation/demodulation, frame synchronization, the channel process (path loss + AWGN), the KISS driver and the spectrum viewer.
 
 ### [FutureSDR](https://github.com/FutureSDR/FutureSDR.git)
-SDR framework providing the runtime and building blocks for LoRaSDR.
+SDR framework providing the runtime and DSP building blocks used by LoRaSDR.
 
 ## Development
 
-### Building Meshtastic Firmware
+### Build the Meshtastic firmware
 
-The firmware is built automatically on first node launch, but can be built manually:
-
+Built automatically on first node launch; to build manually:
 ```bash
 cd meshtastic_firmware
 pio run -e native_virtual
 ```
 
-### Running Individual Nodes
+### Project file format
 
-For testing without the GUI:
-
-```bash
-./run_node.sh
-```
-
-Then inside the container:
-```bash
-./meshtasticd -s -v -l 8000 -r 8002 -w 9000 -h <MAC_ADDRESS>
-```
-
-### Project File Format
-
-Projects are saved as JSON arrays of node configurations:
+Projects are JSON arrays of node configurations:
 
 ```json
 [
@@ -169,41 +174,31 @@ Projects are saved as JSON arrays of node configurations:
     "web_port": 9000,
     "local_port": 8000,
     "remote_port": 8002,
-    "state": 3,
+    "tcp_port": 4403,
     "x": 100.0,
     "y": 200.0,
     "MAC_address": "A1B2C3D4E5F6",
-    "frequency": 868000000,
-    "bandwidth": 125000,
-    "code_rate": 4,
-    "spreading_factor": 7,
-    "ldro_enable": false,
-    "region": "EU868",
-    "slots_count": 0,
-    "modem_preset": "LONG_FAST"
+    "region": "EU_868",
+    "modem_preset": "LONG_FAST",
+    "noise_std": 2e-6,
+    "network_type": "meshtastic"
   }
 ]
 ```
 
-## License
-
-- **LoRaSDR**: GNU GPL v3 (derived from gr-lora_sdr)
-- **Meshtastic Firmware**: GPL v3
-- **Application Code**: See repository for specific licensing
-
-## Acknowledgments
-
-- [Meshtastic](https://meshtastic.org/) project for the mesh networking firmware
-- [FutureSDR](https://github.com/FutureSDR/FutureSDR) team for the SDR framework
-- [gr-lora_sdr](https://github.com/tapparelj/gr-lora_sdr) by Tapparel et al. for LoRa implementation
-
 ## Troubleshooting
 
-### Firmware Build Failures
-Check that all submodules are initialized:
+### Firmware build failures
+Make sure submodules are initialized:
 ```bash
 git submodule update --init --recursive
 ```
 
-### Port Conflicts
-Ensure the configured ports (default 8000, 8002, 9000) are not in use by other applications.
+### Port conflicts
+Ensure the configured ports (defaults: local 8000, remote 8002, web 9000, TCP 4403) and the channel ports (control 17000, spectrum 18000+) are free.
+
+## Acknowledgments
+
+- [Meshtastic](https://meshtastic.org/) — mesh networking firmware
+- [FutureSDR](https://github.com/FutureSDR/FutureSDR) — SDR framework
+- [gr-lora_sdr](https://github.com/tapparelj/gr-lora_sdr) by Tapparel et al. — LoRa PHY implementation
