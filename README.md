@@ -8,15 +8,15 @@ Instead of an SX126x/SX127x transceiver over SPI, the firmware talks to a virtua
 
 **Broadcast propagation across the mesh**
 
-<video src="doc/giff/broadcast.mp4" controls muted width="100%"></video>
+![Broadcast](doc/giff/broadcast.gif)
 
 **Launch, direct ping and multi-hop ping (relaying)**
 
-<video src="doc/giff/launch_ping_multihop_ping.mp4" controls muted width="100%"></video>
+![Multihop](doc/giff/launch_ping_multihop_ping.gif)
 
 **Live spectrum & waterfall**
 
-<video src="doc/giff/waterfall.mp4" controls muted width="100%"></video>
+![Waterfall](doc/giff/waterfall.gif)
 
 ## What it does
 
